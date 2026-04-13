@@ -14,6 +14,8 @@ Run with custom parameters::
 
 import argparse
 import os
+import signal
+import types
 
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend when saving to file
@@ -40,6 +42,7 @@ def analyse(
     max_samples: int | None = None,
     min_samples: int = 0,
     use_processes: bool = False,
+    adaptive_chunk_size: bool = False,
 ) -> None:
     graph = generate_graph(num_vertices, connectivity, seed=seed)
     connectivity_label = f"{connectivity}" if connectivity is not None else "Delaunay"
@@ -69,17 +72,46 @@ def analyse(
     else:
         orientations_iter = generate_strongly_connected_orientations(
             graph, num_workers=workers, chunk_size=chunk_size,
-            use_processes=use_processes,
+            use_processes=use_processes, adaptive_chunk_size=adaptive_chunk_size,
         )
 
-    for orientation in orientations_iter:
-        n_orientations += 1
-        apsp_sum, counts = calculate_apsp_sum_and_nhop_neighbor_counts(
-            orientation, hops=HOPS
+    # --- SIGINT / Ctrl-C handling ---
+    # Register a signal handler so that pressing Ctrl-C sets a flag instead
+    # of raising KeyboardInterrupt mid-computation.  The loop checks the flag
+    # after each orientation is processed, then falls through to produce a
+    # partial chart from whatever data has been collected so far.
+    interrupted = False
+
+    def _sigint_handler(sig: int, frame: types.FrameType | None) -> None:
+        nonlocal interrupted
+        interrupted = True
+        print(
+            "\nInterrupted! Generating chart from intermediate results …",
+            flush=True,
         )
-        apsp_sums.append(apsp_sum)
-        for hop in HOPS:
-            nhop_counts[hop].append(counts[hop])
+
+    old_handler = signal.signal(signal.SIGINT, _sigint_handler)
+    try:
+        for orientation in orientations_iter:
+            if interrupted:
+                break
+            n_orientations += 1
+            apsp_sum, counts = calculate_apsp_sum_and_nhop_neighbor_counts(
+                orientation, hops=HOPS
+            )
+            apsp_sums.append(apsp_sum)
+            for hop in HOPS:
+                nhop_counts[hop].append(counts[hop])
+    except KeyboardInterrupt:
+        # Fallback in case the signal handler did not suppress the exception
+        # (e.g. when the interrupt arrived while inside a C extension).
+        interrupted = True
+        print(
+            "\nInterrupted! Generating chart from intermediate results …",
+            flush=True,
+        )
+    finally:
+        signal.signal(signal.SIGINT, old_handler)
 
     print(f"Strongly-connected orientations found: {n_orientations}")
 
@@ -87,9 +119,11 @@ def analyse(
         print("No strongly-connected orientations found – nothing to plot.")
         return
 
+    partial_label = " [partial]" if interrupted else ""
     title = (
         f"n={num_vertices} vertices, p={connectivity_label} "
-        f"({graph.number_of_edges()} edges, {n_orientations} orientations)"
+        f"({graph.number_of_edges()} edges, {n_orientations} orientations"
+        f"{partial_label})"
     )
     save_path = output or f"result_v{num_vertices}_{connectivity_label}.png"
     plot_score_correlations(
@@ -98,7 +132,7 @@ def analyse(
         title=title,
         save_path=save_path,
     )
-    print(f"Plot saved to: {os.path.abspath(save_path)}")
+    print(f"{'Partial ' if interrupted else ''}Plot saved to: {os.path.abspath(save_path)}")
 
 
 def main() -> None:
@@ -150,6 +184,12 @@ def main() -> None:
              "found when using --max-samples. Exits with an error if fewer are "
              "found within the attempt budget (default: 0, i.e. no minimum)."
     )
+    parser.add_argument(
+        "--adaptive-chunk-size", action="store_true", default=False,
+        help="Automatically compute an optimal chunk size based on the total "
+             "workload (2^|E|) and number of workers. Overrides --chunk-size "
+             "when performing exhaustive enumeration (default: False)."
+    )
     args = parser.parse_args()
     analyse(
         args.vertices,
@@ -161,6 +201,7 @@ def main() -> None:
         args.max_samples,
         args.min_samples,
         args.processes,
+        args.adaptive_chunk_size,
     )
 
 
