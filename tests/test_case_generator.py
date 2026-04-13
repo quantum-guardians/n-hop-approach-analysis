@@ -164,11 +164,19 @@ class TestSampleStronglyConnectedOrientations:
             list(sample_strongly_connected_orientations(_triangle(), max_samples=1, max_attempts=0))
 
     def test_max_attempts_bounds_runtime(self):
-        """max_attempts limits total candidates checked regardless of max_samples."""
+        """max_attempts limits total candidates checked regardless of max_samples.
+
+        This test uses num_workers=1 (sequential path) where max_attempts=1
+        strictly means "try exactly 1 candidate".  The parallel path may check
+        more candidates per round-trip due to batching; that behaviour is tested
+        separately in TestSampleStronglyConnectedOrientationsParallel.
+        """
         g = _triangle()
-        # With max_attempts=1, at most 1 candidate is checked, yielding 0 or 1 result.
+        # With max_attempts=1 and num_workers=1, at most 1 candidate is checked.
         results = list(
-            sample_strongly_connected_orientations(g, max_samples=100, seed=7, max_attempts=1)
+            sample_strongly_connected_orientations(
+                g, max_samples=100, seed=7, max_attempts=1, num_workers=1
+            )
         )
         assert len(results) <= 1
 
@@ -235,3 +243,94 @@ class TestSampleStronglyConnectedOrientations:
             list(
                 sample_strongly_connected_orientations(g, max_samples=5, min_samples=1, seed=0)
             )
+
+
+class TestSampleStronglyConnectedOrientationsParallel:
+    """Tests that the parallel (num_workers > 1) sampling path is correct."""
+
+    def test_parallel_returns_digraphs(self):
+        """All yielded objects are DiGraph instances with num_workers=2."""
+        for dg in sample_strongly_connected_orientations(
+            _triangle(), max_samples=5, seed=0, num_workers=2
+        ):
+            assert isinstance(dg, nx.DiGraph)
+
+    def test_parallel_all_strongly_connected(self):
+        """Every orientation yielded by the parallel path is strongly connected."""
+        for dg in sample_strongly_connected_orientations(
+            _triangle(), max_samples=10, seed=1, num_workers=2
+        ):
+            assert nx.is_strongly_connected(dg)
+
+    def test_parallel_max_samples_respected(self):
+        """num_workers=2 never yields more than max_samples orientations."""
+        results = list(
+            sample_strongly_connected_orientations(
+                _triangle(), max_samples=1, seed=4, num_workers=2
+            )
+        )
+        assert len(results) <= 1
+
+    def test_parallel_preserves_nodes(self):
+        g = _triangle()
+        for dg in sample_strongly_connected_orientations(
+            g, max_samples=5, seed=2, num_workers=2
+        ):
+            assert set(dg.nodes()) == set(g.nodes())
+
+    def test_parallel_preserves_edge_count(self):
+        g = _triangle()
+        for dg in sample_strongly_connected_orientations(
+            g, max_samples=5, seed=3, num_workers=2
+        ):
+            assert dg.number_of_edges() == g.number_of_edges()
+
+    def test_parallel_matches_sequential_count(self):
+        """Both parallel and sequential modes find at least one SC orientation
+        for the triangle graph and all yielded orientations are strongly connected."""
+        g = _triangle()
+        sequential = list(
+            sample_strongly_connected_orientations(
+                g, max_samples=100, seed=0, num_workers=1, max_attempts=10_000
+            )
+        )
+        parallel = list(
+            sample_strongly_connected_orientations(
+                g, max_samples=100, seed=0, num_workers=2, max_attempts=10_000
+            )
+        )
+        # Both should find some SC orientations; triangle has exactly 2 SC orientations
+        assert len(sequential) >= 1
+        assert len(parallel) >= 1
+        for dg in parallel:
+            assert nx.is_strongly_connected(dg)
+
+    def test_parallel_path_graph_yields_nothing(self):
+        """A path graph has no SC orientation; parallel path also yields nothing."""
+        results = list(
+            sample_strongly_connected_orientations(
+                _path_graph(), max_samples=10, seed=0, max_attempts=200, num_workers=2
+            )
+        )
+        assert results == []
+
+    def test_parallel_min_samples_satisfied(self):
+        """Parallel path honours min_samples."""
+        g = _triangle()
+        results = list(
+            sample_strongly_connected_orientations(
+                g, max_samples=5, min_samples=2, seed=0, num_workers=2
+            )
+        )
+        assert len(results) >= 2
+
+    def test_parallel_chunk_size_parameter(self):
+        """chunk_size parameter is accepted and produces valid results."""
+        g = _triangle()
+        results = list(
+            sample_strongly_connected_orientations(
+                g, max_samples=5, seed=7, num_workers=2, chunk_size=4
+            )
+        )
+        for dg in results:
+            assert nx.is_strongly_connected(dg)

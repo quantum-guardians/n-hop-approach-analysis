@@ -53,7 +53,12 @@ def analyse(
     n_orientations = 0
     if max_samples is not None:
         orientations_iter = sample_strongly_connected_orientations(
-            graph, max_samples=max_samples, min_samples=min_samples, seed=seed
+            graph,
+            max_samples=max_samples,
+            min_samples=min_samples,
+            seed=seed,
+            num_workers=workers,
+            chunk_size=chunk_size,
         )
         msg = f"Sampling up to {max_samples} strongly-connected orientations"
         if min_samples > 0:

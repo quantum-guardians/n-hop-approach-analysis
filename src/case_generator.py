@@ -11,6 +11,7 @@ to draw a bounded random sample instead of exhaustively checking all 2^m cases.
 """
 
 import os
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Iterator
 
@@ -52,6 +53,36 @@ def _build_strongly_connected_orientations_for_range(
                 dg.add_edge(v, u)
             else:
                 dg.add_edge(u, v)
+        if nx.is_strongly_connected(dg):
+            orientations.append(dg)
+    return orientations
+
+
+def _check_sample_batch(
+    nodes: list[object],
+    edges: list[tuple[object, object]],
+    bits_matrix: np.ndarray,
+) -> list[nx.DiGraph]:
+    """Check a batch of random orientation bitmasks and return strongly-connected ones.
+
+    Args:
+        nodes: List of graph nodes.
+        edges: List of undirected edges ``(u, v)``.
+        bits_matrix: 2-D array of shape ``(batch_size, edge_count)`` with values
+            in ``{0, 1}``.  Each row encodes one candidate orientation.
+
+    Returns:
+        List of strongly-connected :class:`networkx.DiGraph` instances.
+    """
+    orientations: list[nx.DiGraph] = []
+    for bits in bits_matrix:
+        dg = nx.DiGraph()
+        dg.add_nodes_from(nodes)
+        for bit, (u, v) in zip(bits, edges):
+            if bit == 0:
+                dg.add_edge(u, v)
+            else:
+                dg.add_edge(v, u)
         if nx.is_strongly_connected(dg):
             orientations.append(dg)
     return orientations
@@ -128,6 +159,8 @@ def sample_strongly_connected_orientations(
     min_samples: int = 0,
     seed: int | None = None,
     max_attempts: int | None = None,
+    num_workers: int | None = None,
+    chunk_size: int = 64,
 ) -> Iterator[nx.DiGraph]:
     """Yield up to *max_samples* strongly-connected orientations via random sampling.
 
@@ -147,6 +180,11 @@ def sample_strongly_connected_orientations(
     so callers should only set *min_samples* > 0 when the graph is known to
     be strongly orientable.
 
+    When *num_workers* > 1 (or ``None``, which defaults to the CPU core count)
+    random-candidate batches are evaluated in parallel using a
+    :class:`~concurrent.futures.ThreadPoolExecutor`, which can substantially
+    reduce wall-clock time for large *max_samples* or *max_attempts* values.
+
     Args:
         graph: An undirected :class:`networkx.Graph`.
         max_samples: Maximum number of strongly-connected orientations to
@@ -161,6 +199,15 @@ def sample_strongly_connected_orientations(
         max_attempts: Maximum number of random orientations to try *after*
             *min_samples* has been satisfied (to bound additional sampling up
             to *max_samples*).  Defaults to ``max(max_samples * 100, 1_000)``.
+        num_workers: Number of worker threads for parallel candidate
+            evaluation.  If ``None``, uses the CPU core count.  Set to ``1``
+            to disable parallelism.
+        chunk_size: Number of random orientations generated and evaluated per
+            worker task.  Larger values reduce task-submission overhead but
+            may cause the function to exceed *max_attempts* by up to
+            ``num_workers * chunk_size`` candidates.  Defaults to ``64``.
+            When called via the CLI the ``--chunk-size`` flag overrides this
+            default (the CLI default is ``2048``).
 
     Yields:
         :class:`networkx.DiGraph` instances that are strongly connected.
@@ -204,28 +251,71 @@ def sample_strongly_connected_orientations(
             )
         return
 
+    workers = os.cpu_count() if num_workers is None else num_workers
+    workers = max(1, workers or 1)
+
     rng = np.random.default_rng(seed)
     found = 0
     attempt = 0
 
-    while True:
-        if found >= max_samples:
-            break
-        # Enforce max_attempts only after min_samples has already been satisfied
-        if found >= min_samples and attempt >= max_attempts:
-            break
+    if workers == 1:
+        while True:
+            if found >= max_samples:
+                break
+            # Enforce max_attempts only after min_samples has already been satisfied
+            if found >= min_samples and attempt >= max_attempts:
+                break
 
-        bits = rng.integers(0, 2, size=edge_count)
-        dg = nx.DiGraph()
-        dg.add_nodes_from(nodes)
-        for bit, (u, v) in zip(bits, edges):
-            if bit == 0:
-                dg.add_edge(u, v)
-            else:
-                dg.add_edge(v, u)
+            bits = rng.integers(0, 2, size=edge_count)
+            dg = nx.DiGraph()
+            dg.add_nodes_from(nodes)
+            for bit, (u, v) in zip(bits, edges):
+                if bit == 0:
+                    dg.add_edge(u, v)
+                else:
+                    dg.add_edge(v, u)
 
-        if nx.is_strongly_connected(dg):
-            found += 1
-            yield dg
+            if nx.is_strongly_connected(dg):
+                found += 1
+                yield dg
 
-        attempt += 1
+            attempt += 1
+        return
+
+    # --- Parallel sampling via ThreadPoolExecutor ---
+    # We maintain a sliding window of in-flight futures.  After each future
+    # completes we decide whether to submit another batch or simply drain the
+    # remaining in-flight work and stop.
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        pending: deque = deque()
+
+        def _submit_batch() -> None:
+            batch = rng.integers(0, 2, size=(chunk_size, edge_count))
+            pending.append(
+                executor.submit(_check_sample_batch, nodes, edges, batch)
+            )
+
+        def _should_keep_going() -> bool:
+            """True when we still need to submit more work."""
+            if found >= max_samples:
+                return False
+            # While min_samples is not yet satisfied, always keep going
+            if found < min_samples:
+                return True
+            return attempt < max_attempts
+
+        # Pre-fill the pipeline with one chunk per worker
+        for _ in range(workers):
+            _submit_batch()
+
+        while pending:
+            results = pending.popleft().result()
+            attempt += chunk_size
+
+            for dg in results:
+                if found < max_samples:
+                    found += 1
+                    yield dg
+
+            if _should_keep_going():
+                _submit_batch()
