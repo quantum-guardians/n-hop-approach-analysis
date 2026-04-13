@@ -40,7 +40,7 @@ python main.py --vertices 10 --connectivity 0.5 --seed 42 --max-samples 500 --ou
 | `--vertices` | 5 | 정점 수 |
 | `--connectivity` | 0.6 | 간선 존재 확률 (0–1) |
 | `--seed` | None | 재현성을 위한 랜덤 시드 |
-| `--output` | None | 저장할 이미지 경로 (미지정 시 화면 출력) |
+| `--output` | `result_v{N}_c{p}.png` | 저장할 이미지 경로. 미지정 시 `result_v{vertices}_c{connectivity}.png`으로 자동 생성 |
 | `--workers` | CPU 코어 수 | 방향 조합 탐색용 스레드 수 (전수 열거 시에만 사용) |
 | `--chunk-size` | 2048 | 스레드 작업 단위 방향 조합 수 (전수 열거 시에만 사용) |
 | `--max-samples` | None | 무작위 샘플링 모드: 최대 N개의 강연결 방향 조합을 샘플링. 지정 시 전수 열거 대신 샘플링 사용 |

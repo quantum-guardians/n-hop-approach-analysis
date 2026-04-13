@@ -70,7 +70,9 @@ class TestCalculateNhopNeighborCounts:
         assert set(counts.keys()) == {1, 2}
 
     def test_no_pairs_beyond_graph_diameter(self):
-        """3-cycle has diameter 2; no pairs at hop distance 3 or 4."""
+        """Directed 3-cycle (0→1→2→0): a simple path of length ≥ 3 would require
+        at least 4 distinct vertices, but the graph has only 3.  So both
+        3-hop and 4-hop simple-path counts are 0."""
         dg = _directed_triangle_cw()
         counts = calculate_nhop_neighbor_counts(dg, hops=(3, 4))
         assert counts[3] == 0

@@ -78,14 +78,14 @@ def analyse(
         f"n={num_vertices} vertices, p={connectivity} "
         f"({graph.number_of_edges()} edges, {n_orientations} orientations)"
     )
+    save_path = output or f"result_v{num_vertices}_c{connectivity}.png"
     plot_score_correlations(
         apsp_sums,
         nhop_counts,
         title=title,
-        save_path=output,
+        save_path=save_path,
     )
-    if output:
-        print(f"Plot saved to: {os.path.abspath(output)}")
+    print(f"Plot saved to: {os.path.abspath(save_path)}")
 
 
 def main() -> None:
@@ -107,7 +107,7 @@ def main() -> None:
     parser.add_argument(
         "--output", type=str, default=None,
         help="File path to save the plot (e.g. out.png). "
-             "If omitted, plot is displayed interactively."
+             "If omitted, defaults to result_v{vertices}_c{connectivity}.png."
     )
     parser.add_argument(
         "--workers", type=int, default=None,
