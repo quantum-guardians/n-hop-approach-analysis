@@ -1,6 +1,7 @@
 """Tests for the case generator module."""
 
 import networkx as nx
+import pytest
 
 from src.case_generator import generate_strongly_connected_orientations
 
@@ -56,3 +57,29 @@ class TestGenerateStronglyConnectedOrientations:
         g.add_node(0)
         orientations = list(generate_strongly_connected_orientations(g))
         assert len(orientations) == 1
+
+    def test_single_thread_and_multi_thread_match(self):
+        g = _triangle()
+        single = list(generate_strongly_connected_orientations(g, num_workers=1))
+        multi = list(generate_strongly_connected_orientations(g, num_workers=2))
+        assert len(single) == len(multi) == 2
+        assert {frozenset(dg.edges()) for dg in single} == {
+            frozenset(dg.edges()) for dg in multi
+        }
+
+    def test_chunk_size_does_not_change_results(self):
+        g = _triangle()
+        c1 = list(
+            generate_strongly_connected_orientations(g, num_workers=1, chunk_size=1)
+        )
+        c4 = list(
+            generate_strongly_connected_orientations(g, num_workers=1, chunk_size=4)
+        )
+        assert {frozenset(dg.edges()) for dg in c1} == {
+            frozenset(dg.edges()) for dg in c4
+        }
+
+    def test_invalid_chunk_size_raises(self):
+        g = _triangle()
+        with pytest.raises(ValueError):
+            list(generate_strongly_connected_orientations(g, chunk_size=0))

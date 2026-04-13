@@ -1,9 +1,11 @@
 """Tests for the score calculator module."""
 
 import networkx as nx
-import pytest
-
-from src.score_calculator import calculate_apsp_sum, calculate_nhop_neighbor_counts
+from src.score_calculator import (
+    calculate_apsp_sum,
+    calculate_apsp_sum_and_nhop_neighbor_counts,
+    calculate_nhop_neighbor_counts,
+)
 
 
 def _directed_triangle_cw() -> nx.DiGraph:
@@ -78,3 +80,9 @@ class TestCalculateNhopNeighborCounts:
         # 0→1 and 1→2 are at distance 1; 0→2 is at distance 2
         assert counts[1] == 2
         assert counts[2] == 1
+
+    def test_combined_calculation_matches_individual_functions(self):
+        dg = _directed_triangle_cw()
+        apsp, counts = calculate_apsp_sum_and_nhop_neighbor_counts(dg, hops=(1, 2, 3))
+        assert apsp == calculate_apsp_sum(dg)
+        assert counts == calculate_nhop_neighbor_counts(dg, hops=(1, 2, 3))

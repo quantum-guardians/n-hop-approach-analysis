@@ -20,7 +20,7 @@ matplotlib.use("Agg")  # non-interactive backend when saving to file
 
 from src.graph_generator import generate_graph
 from src.case_generator import generate_strongly_connected_orientations
-from src.score_calculator import calculate_apsp_sum, calculate_nhop_neighbor_counts
+from src.score_calculator import calculate_apsp_sum_and_nhop_neighbor_counts
 from src.visualizer import plot_score_correlations
 
 
@@ -32,6 +32,8 @@ def analyse(
     connectivity: float,
     seed: int | None,
     output: str | None,
+    workers: int | None,
+    chunk_size: int,
 ) -> None:
     graph = generate_graph(num_vertices, connectivity, seed=seed)
     print(
@@ -43,10 +45,14 @@ def analyse(
     nhop_counts: dict[int, list[int]] = {n: [] for n in HOPS}
 
     n_orientations = 0
-    for orientation in generate_strongly_connected_orientations(graph):
+    for orientation in generate_strongly_connected_orientations(
+        graph, num_workers=workers, chunk_size=chunk_size
+    ):
         n_orientations += 1
-        apsp_sums.append(calculate_apsp_sum(orientation))
-        counts = calculate_nhop_neighbor_counts(orientation, hops=HOPS)
+        apsp_sum, counts = calculate_apsp_sum_and_nhop_neighbor_counts(
+            orientation, hops=HOPS
+        )
+        apsp_sums.append(apsp_sum)
         for hop in HOPS:
             nhop_counts[hop].append(counts[hop])
 
@@ -91,8 +97,24 @@ def main() -> None:
         help="File path to save the plot (e.g. out.png). "
              "If omitted, plot is displayed interactively."
     )
+    parser.add_argument(
+        "--workers", type=int, default=None,
+        help="Thread workers for orientation generation "
+             "(default: CPU core count)"
+    )
+    parser.add_argument(
+        "--chunk-size", type=int, default=2048,
+        help="Orientation chunk size processed per task (default: 2048)"
+    )
     args = parser.parse_args()
-    analyse(args.vertices, args.connectivity, args.seed, args.output)
+    analyse(
+        args.vertices,
+        args.connectivity,
+        args.seed,
+        args.output,
+        args.workers,
+        args.chunk_size,
+    )
 
 
 if __name__ == "__main__":

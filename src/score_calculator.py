@@ -12,6 +12,37 @@ Provides two families of metrics for a directed graph:
 from typing import Sequence
 
 import networkx as nx
+import numpy as np
+
+
+def _collect_non_self_shortest_path_lengths(graph: nx.DiGraph) -> np.ndarray:
+    return np.fromiter(
+        (
+            length
+            for source, lengths in nx.all_pairs_shortest_path_length(graph)
+            for target, length in lengths.items()
+            if target != source
+        ),
+        dtype=np.int64,
+    )
+
+
+def calculate_apsp_sum_and_nhop_neighbor_counts(
+    graph: nx.DiGraph,
+    hops: Sequence[int] = (2, 3, 4),
+) -> tuple[float, dict[int, int]]:
+    lengths = _collect_non_self_shortest_path_lengths(graph)
+    apsp_sum = float(lengths.sum()) if lengths.size else 0.0
+
+    if not hops:
+        return apsp_sum, {}
+
+    max_hop = max(hops)
+    hist = np.bincount(lengths, minlength=max_hop + 1) if lengths.size else np.zeros(
+        max_hop + 1, dtype=np.int64
+    )
+    counts = {hop: int(hist[hop]) if hop < hist.size else 0 for hop in hops}
+    return apsp_sum, counts
 
 
 def calculate_apsp_sum(graph: nx.DiGraph) -> float:
@@ -25,12 +56,7 @@ def calculate_apsp_sum(graph: nx.DiGraph) -> float:
     Returns:
         Sum of shortest-path lengths for all ordered pairs of distinct vertices.
     """
-    total = 0.0
-    for source, lengths in nx.all_pairs_shortest_path_length(graph):
-        for target, length in lengths.items():
-            if target != source:
-                total += length
-    return total
+    return calculate_apsp_sum_and_nhop_neighbor_counts(graph, hops=())[0]
 
 
 def calculate_nhop_neighbor_counts(
@@ -50,12 +76,4 @@ def calculate_nhop_neighbor_counts(
     Returns:
         A dictionary mapping each hop distance to its pair count.
     """
-    hop_counts: dict[int, int] = {n: 0 for n in hops}
-    hop_set = set(hops)
-
-    for source, lengths in nx.all_pairs_shortest_path_length(graph):
-        for target, length in lengths.items():
-            if target != source and length in hop_set:
-                hop_counts[length] += 1
-
-    return hop_counts
+    return calculate_apsp_sum_and_nhop_neighbor_counts(graph, hops=hops)[1]
