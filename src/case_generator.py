@@ -11,13 +11,33 @@ to draw a bounded random sample instead of exhaustively checking all 2^m cases.
 """
 
 import functools
+import itertools
 import os
 from collections import deque
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from typing import Iterator
 
 import networkx as nx
 import numpy as np
+
+
+def _compute_adaptive_chunk_size(total_orientations: int, workers: int) -> int:
+    """Compute an adaptive chunk size for exhaustive orientation enumeration.
+
+    Targets roughly 4× as many chunks as workers to keep all workers busy
+    and avoid long-tail effects, while capping at 65 536 to bound per-task
+    memory usage.
+
+    Args:
+        total_orientations: Total number of orientations (``2 ** edge_count``).
+        workers: Number of parallel workers.
+
+    Returns:
+        A chunk size in the range ``[1, 65536]``.
+    """
+    target_chunks = max(workers * 4, 1)
+    chunk = max(1, total_orientations // target_chunks)
+    return min(chunk, 65_536)
 
 
 def _build_strongly_connected_orientations_for_range(
@@ -32,7 +52,29 @@ def _build_strongly_connected_orientations_for_range(
     if edge_count <= 63:
         indices = np.arange(start, stop, dtype=np.uint64)
         shifts = np.arange(edge_count, dtype=np.uint64)
-        bits_matrix = (indices[:, None] >> shifts) & 1
+        bits_matrix = ((indices[:, None] >> shifts) & 1).astype(np.int32)
+
+        # Early pruning: discard orientations where any node has in- or
+        # out-degree 0 (those can never be strongly connected).
+        n_nodes = len(nodes)
+        if n_nodes > 1 and bits_matrix.size > 0:
+            node_to_idx = {n: i for i, n in enumerate(nodes)}
+            # src_when_0[i, j] = 1 when edge j points *away from* node i at bit=0
+            # tgt_when_0[i, j] = 1 when edge j points *toward* node i at bit=0
+            src_when_0 = np.zeros((n_nodes, edge_count), dtype=np.int32)
+            tgt_when_0 = np.zeros((n_nodes, edge_count), dtype=np.int32)
+            for eidx, (u, v) in enumerate(edges):
+                src_when_0[node_to_idx[u], eidx] = 1
+                tgt_when_0[node_to_idx[v], eidx] = 1
+
+            inv_bits = 1 - bits_matrix  # shape (batch, edge_count)
+            # out_deg[row, node] = edges leaving node in this orientation
+            out_deg = inv_bits @ src_when_0.T + bits_matrix @ tgt_when_0.T
+            # in_deg[row, node] = edges entering node in this orientation
+            in_deg = inv_bits @ tgt_when_0.T + bits_matrix @ src_when_0.T
+            # Keep only rows where every node has both in- and out-degree >= 1
+            valid = (out_deg > 0).all(axis=1) & (in_deg > 0).all(axis=1)
+            bits_matrix = bits_matrix[valid]
 
         for row in bits_matrix:
             dg = nx.DiGraph()
@@ -94,6 +136,7 @@ def generate_strongly_connected_orientations(
     num_workers: int | None = None,
     chunk_size: int = 2048,
     use_processes: bool = False,
+    adaptive_chunk_size: bool = False,
 ) -> Iterator[nx.DiGraph]:
     """Yield all strongly-connected orientations of *graph*.
 
@@ -106,11 +149,16 @@ def generate_strongly_connected_orientations(
         num_workers: Number of worker threads or processes for orientation
             checks.  If ``None``, uses CPU core count.
         chunk_size: Number of orientation bitmasks processed per task.
+            Ignored when *adaptive_chunk_size* is ``True``.
         use_processes: When ``True``, use a
             :class:`~concurrent.futures.ProcessPoolExecutor` instead of a
             :class:`~concurrent.futures.ThreadPoolExecutor`.  Process-based
             parallelism bypasses the GIL and can improve throughput on
             CPU-bound workloads.  Defaults to ``False`` (thread-based).
+        adaptive_chunk_size: When ``True``, ignore *chunk_size* and compute
+            an optimal chunk size based on the total workload (``2**|E|``)
+            and the number of workers using
+            :func:`_compute_adaptive_chunk_size`.  Defaults to ``False``.
 
     Yields:
         :class:`networkx.DiGraph` instances that are strongly connected.
@@ -135,28 +183,54 @@ def generate_strongly_connected_orientations(
         return
 
     total_orientations = 1 << edge_count
-    starts = range(0, total_orientations, chunk_size)
     workers = os.cpu_count() if num_workers is None else num_workers
     workers = max(1, workers or 1)
 
+    effective_chunk_size = (
+        _compute_adaptive_chunk_size(total_orientations, workers)
+        if adaptive_chunk_size
+        else chunk_size
+    )
+
     if workers == 1:
-        for start in starts:
-            stop = min(start + chunk_size, total_orientations)
+        for start in range(0, total_orientations, effective_chunk_size):
+            stop = min(start + effective_chunk_size, total_orientations)
             for dg in _build_strongly_connected_orientations_for_range(
                 nodes, edges, start, stop
             ):
                 yield dg
         return
 
-    stops = [min(s + chunk_size, total_orientations) for s in starts]
     _worker = functools.partial(
         _build_strongly_connected_orientations_for_range, nodes, edges
     )
     executor_class = ProcessPoolExecutor if use_processes else ThreadPoolExecutor
     with executor_class(max_workers=workers) as executor:
-        for result in executor.map(_worker, starts, stops):
-            for dg in result:
+        # Lazy generator of (start, stop) pairs — avoids building the full
+        # list of stops up front (itertools.islice-based pipeline).
+        work_iter = (
+            (s, min(s + effective_chunk_size, total_orientations))
+            for s in range(0, total_orientations, effective_chunk_size)
+        )
+        pending: deque[Future[list[nx.DiGraph]]] = deque()
+
+        def _submit_next() -> bool:
+            """Submit the next chunk; return False when work is exhausted."""
+            pair = next(work_iter, None)
+            if pair is None:
+                return False
+            pending.append(executor.submit(_worker, *pair))
+            return True
+
+        # Pre-fill the pipeline with one task per worker.
+        for _ in range(workers):
+            if not _submit_next():
+                break
+
+        while pending:
+            for dg in pending.popleft().result():
                 yield dg
+            _submit_next()
 
 
 def sample_strongly_connected_orientations(

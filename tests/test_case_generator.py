@@ -4,6 +4,7 @@ import networkx as nx
 import pytest
 
 from src.case_generator import (
+    _compute_adaptive_chunk_size,
     generate_strongly_connected_orientations,
     sample_strongly_connected_orientations,
 )
@@ -430,4 +431,69 @@ class TestSampleStronglyConnectedOrientationsProcesses:
             g, max_samples=5, seed=2, num_workers=2, use_processes=True
         ):
             assert set(dg.nodes()) == set(g.nodes())
+
+
+class TestComputeAdaptiveChunkSize:
+    """Tests for the _compute_adaptive_chunk_size helper."""
+
+    def test_always_returns_at_least_one(self):
+        assert _compute_adaptive_chunk_size(1, 1) >= 1
+
+    def test_capped_at_65536(self):
+        assert _compute_adaptive_chunk_size(2 ** 30, 1) == 65_536
+
+    def test_scales_with_total(self):
+        small = _compute_adaptive_chunk_size(64, 4)
+        large = _compute_adaptive_chunk_size(65_536, 4)
+        assert small <= large
+
+    def test_reasonable_for_typical_graph(self):
+        # 2^16 total orientations, 4 workers → chunk ~1024 (within bounds)
+        chunk = _compute_adaptive_chunk_size(1 << 16, 4)
+        assert 1 <= chunk <= 65_536
+
+    def test_more_workers_gives_smaller_or_equal_chunk(self):
+        chunk_few = _compute_adaptive_chunk_size(1 << 20, 2)
+        chunk_many = _compute_adaptive_chunk_size(1 << 20, 8)
+        assert chunk_many <= chunk_few
+
+
+class TestGenerateStronglyConnectedOrientationsAdaptive:
+    """Tests for the adaptive_chunk_size parameter."""
+
+    def test_adaptive_produces_same_results_as_default(self):
+        """adaptive_chunk_size=True must yield the same SC orientations."""
+        g = _triangle()
+        default = {
+            frozenset(dg.edges())
+            for dg in generate_strongly_connected_orientations(g)
+        }
+        adaptive = {
+            frozenset(dg.edges())
+            for dg in generate_strongly_connected_orientations(
+                g, adaptive_chunk_size=True
+            )
+        }
+        assert default == adaptive
+
+    def test_adaptive_multi_worker(self):
+        """adaptive_chunk_size=True with multiple workers yields correct results."""
+        g = _triangle()
+        results = list(
+            generate_strongly_connected_orientations(
+                g, num_workers=2, adaptive_chunk_size=True
+            )
+        )
+        assert len(results) == 2
+        for dg in results:
+            assert nx.is_strongly_connected(dg)
+
+    def test_adaptive_path_graph_yields_nothing(self):
+        """Path graph has no SC orientation even with adaptive chunk size."""
+        results = list(
+            generate_strongly_connected_orientations(
+                _path_graph(), adaptive_chunk_size=True
+            )
+        )
+        assert results == []
 
