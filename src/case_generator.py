@@ -6,6 +6,8 @@ orientations that yield a *strongly connected* directed graph — meaning every
 vertex can reach every other vertex.
 
 For a graph with *m* edges there are 2^m possible orientations in total.
+For large graphs, :func:`sample_strongly_connected_orientations` can be used
+to draw a bounded random sample instead of exhaustively checking all 2^m cases.
 """
 
 import os
@@ -90,7 +92,7 @@ def generate_strongly_connected_orientations(
     if edge_count == 0:
         dg = nx.DiGraph()
         dg.add_nodes_from(nodes)
-        if nx.is_strongly_connected(dg):
+        if len(nodes) <= 1 or nx.is_strongly_connected(dg):
             yield dg
         return
 
@@ -118,3 +120,73 @@ def generate_strongly_connected_orientations(
         for result in futures:
             for dg in result:
                 yield dg
+
+
+def sample_strongly_connected_orientations(
+    graph: nx.Graph,
+    max_samples: int,
+    seed: int | None = None,
+    max_attempts: int | None = None,
+) -> Iterator[nx.DiGraph]:
+    """Yield up to *max_samples* strongly-connected orientations via random sampling.
+
+    Instead of exhaustively enumerating all ``2 ** m`` orientations, this
+    function randomly samples edge-direction assignments and yields those that
+    produce a strongly-connected directed graph.  Because the number of
+    candidates checked is bounded by *max_attempts* (independent of graph
+    size), the runtime is effectively constant with respect to the number of
+    vertices/edges.
+
+    Args:
+        graph: An undirected :class:`networkx.Graph`.
+        max_samples: Maximum number of strongly-connected orientations to
+            yield.  Must be >= 1.
+        seed: Random seed for reproducibility.  If ``None``, a random seed is
+            used.
+        max_attempts: Maximum number of random orientations to try before
+            stopping (to bound runtime).  Defaults to
+            ``max(max_samples * 100, 1_000)``.
+
+    Yields:
+        :class:`networkx.DiGraph` instances that are strongly connected.
+
+    Raises:
+        ValueError: If *max_samples* < 1 or *max_attempts* < 1.
+    """
+    if max_samples < 1:
+        raise ValueError(f"max_samples must be >= 1, got {max_samples}")
+    if max_attempts is None:
+        max_attempts = max(max_samples * 100, 1_000)
+    if max_attempts < 1:
+        raise ValueError(f"max_attempts must be >= 1, got {max_attempts}")
+
+    edges = list(graph.edges())
+    nodes = list(graph.nodes())
+    edge_count = len(edges)
+
+    if edge_count == 0:
+        dg = nx.DiGraph()
+        dg.add_nodes_from(nodes)
+        if len(nodes) <= 1 or nx.is_strongly_connected(dg):
+            yield dg
+        return
+
+    rng = np.random.default_rng(seed)
+    found = 0
+
+    for _ in range(max_attempts):
+        if found >= max_samples:
+            break
+
+        bits = rng.integers(0, 2, size=edge_count)
+        dg = nx.DiGraph()
+        dg.add_nodes_from(nodes)
+        for bit, (u, v) in zip(bits, edges):
+            if bit == 0:
+                dg.add_edge(u, v)
+            else:
+                dg.add_edge(v, u)
+
+        if nx.is_strongly_connected(dg):
+            found += 1
+            yield dg

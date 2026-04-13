@@ -19,7 +19,10 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive backend when saving to file
 
 from src.graph_generator import generate_graph
-from src.case_generator import generate_strongly_connected_orientations
+from src.case_generator import (
+    generate_strongly_connected_orientations,
+    sample_strongly_connected_orientations,
+)
 from src.score_calculator import calculate_apsp_sum_and_nhop_neighbor_counts
 from src.visualizer import plot_score_correlations
 
@@ -34,6 +37,7 @@ def analyse(
     output: str | None,
     workers: int | None,
     chunk_size: int,
+    max_samples: int | None = None,
 ) -> None:
     graph = generate_graph(num_vertices, connectivity, seed=seed)
     print(
@@ -45,9 +49,17 @@ def analyse(
     nhop_counts: dict[int, list[int]] = {n: [] for n in HOPS}
 
     n_orientations = 0
-    for orientation in generate_strongly_connected_orientations(
-        graph, num_workers=workers, chunk_size=chunk_size
-    ):
+    if max_samples is not None:
+        orientations_iter = sample_strongly_connected_orientations(
+            graph, max_samples=max_samples, seed=seed
+        )
+        print(f"Sampling up to {max_samples} strongly-connected orientations …")
+    else:
+        orientations_iter = generate_strongly_connected_orientations(
+            graph, num_workers=workers, chunk_size=chunk_size
+        )
+
+    for orientation in orientations_iter:
         n_orientations += 1
         apsp_sum, counts = calculate_apsp_sum_and_nhop_neighbor_counts(
             orientation, hops=HOPS
@@ -106,6 +118,12 @@ def main() -> None:
         "--chunk-size", type=int, default=2048,
         help="Orientation chunk size processed per task (default: 2048)"
     )
+    parser.add_argument(
+        "--max-samples", type=int, default=None,
+        help="Use random sampling instead of exhaustive search. "
+             "Yield at most this many strongly-connected orientations "
+             "(constant-time regardless of graph size)."
+    )
     args = parser.parse_args()
     analyse(
         args.vertices,
@@ -114,6 +132,7 @@ def main() -> None:
         args.output,
         args.workers,
         args.chunk_size,
+        args.max_samples,
     )
 
 

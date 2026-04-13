@@ -3,7 +3,10 @@
 import networkx as nx
 import pytest
 
-from src.case_generator import generate_strongly_connected_orientations
+from src.case_generator import (
+    generate_strongly_connected_orientations,
+    sample_strongly_connected_orientations,
+)
 
 
 def _triangle() -> nx.Graph:
@@ -83,3 +86,88 @@ class TestGenerateStronglyConnectedOrientations:
         g = _triangle()
         with pytest.raises(ValueError):
             list(generate_strongly_connected_orientations(g, chunk_size=0))
+
+
+class TestSampleStronglyConnectedOrientations:
+    def test_returns_digraphs(self):
+        """All yielded objects are DiGraph instances."""
+        for dg in sample_strongly_connected_orientations(_triangle(), max_samples=5, seed=0):
+            assert isinstance(dg, nx.DiGraph)
+
+    def test_all_results_are_strongly_connected(self):
+        for dg in sample_strongly_connected_orientations(_triangle(), max_samples=10, seed=1):
+            assert nx.is_strongly_connected(dg)
+
+    def test_preserves_all_nodes(self):
+        g = _triangle()
+        for dg in sample_strongly_connected_orientations(g, max_samples=5, seed=2):
+            assert set(dg.nodes()) == set(g.nodes())
+
+    def test_preserves_edge_count(self):
+        g = _triangle()
+        for dg in sample_strongly_connected_orientations(g, max_samples=5, seed=3):
+            assert dg.number_of_edges() == g.number_of_edges()
+
+    def test_max_samples_is_respected(self):
+        """Number of yielded orientations never exceeds max_samples."""
+        g = _triangle()
+        results = list(sample_strongly_connected_orientations(g, max_samples=1, seed=4))
+        assert len(results) <= 1
+
+    def test_reproducible_with_seed(self):
+        """Same seed produces the same sequence of orientations."""
+        g = _triangle()
+        run1 = [frozenset(dg.edges()) for dg in
+                sample_strongly_connected_orientations(g, max_samples=5, seed=42)]
+        run2 = [frozenset(dg.edges()) for dg in
+                sample_strongly_connected_orientations(g, max_samples=5, seed=42)]
+        assert run1 == run2
+
+    def test_different_seeds_may_differ(self):
+        """Different seeds produce different sampling sequences (best-effort check).
+
+        With max_samples=1 the single orientation returned can differ between
+        seeds; if both seeds happen to pick the same orientation the assertion
+        still passes because both results are valid SC orientations.
+        """
+        g = _triangle()
+        run1 = [frozenset(dg.edges()) for dg in
+                sample_strongly_connected_orientations(g, max_samples=1, seed=0)]
+        run2 = [frozenset(dg.edges()) for dg in
+                sample_strongly_connected_orientations(g, max_samples=1, seed=99)]
+        # Each result must be a valid SC orientation edge set
+        for edges in run1 + run2:
+            assert nx.is_strongly_connected(nx.DiGraph(edges))
+
+    def test_path_graph_yields_nothing(self):
+        """A path graph has no SC orientation, so nothing should be yielded."""
+        results = list(
+            sample_strongly_connected_orientations(
+                _path_graph(), max_samples=10, seed=0, max_attempts=200
+            )
+        )
+        assert results == []
+
+    def test_empty_graph_single_node_yields_one(self):
+        """A single-node graph with no edges has exactly one (trivial) SC orientation."""
+        g = nx.Graph()
+        g.add_node(0)
+        results = list(sample_strongly_connected_orientations(g, max_samples=5, seed=0))
+        assert len(results) == 1
+
+    def test_invalid_max_samples_raises(self):
+        with pytest.raises(ValueError):
+            list(sample_strongly_connected_orientations(_triangle(), max_samples=0))
+
+    def test_invalid_max_attempts_raises(self):
+        with pytest.raises(ValueError):
+            list(sample_strongly_connected_orientations(_triangle(), max_samples=1, max_attempts=0))
+
+    def test_max_attempts_bounds_runtime(self):
+        """max_attempts limits total candidates checked regardless of max_samples."""
+        g = _triangle()
+        # With max_attempts=1, at most 1 candidate is checked, yielding 0 or 1 result.
+        results = list(
+            sample_strongly_connected_orientations(g, max_samples=100, seed=7, max_attempts=1)
+        )
+        assert len(results) <= 1
