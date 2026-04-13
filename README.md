@@ -34,6 +34,9 @@ python main.py --vertices 10 --connectivity 0.5 --seed 42 --max-samples 500 --ou
 
 # 무작위 샘플링 + 멀티스레드 병렬 실행
 python main.py --vertices 10 --connectivity 0.5 --seed 42 --max-samples 500 --workers 8 --output result.png
+
+# 멀티프로세스 병렬 실행 (GIL 우회로 CPU 바운드 처리량 향상)
+python main.py --vertices 10 --connectivity 0.5 --seed 42 --max-samples 500 --workers 8 --processes --output result.png
 ```
 
 ### CLI 옵션
@@ -44,9 +47,10 @@ python main.py --vertices 10 --connectivity 0.5 --seed 42 --max-samples 500 --wo
 | `--connectivity` | 0.6 | 간선 존재 확률 (0–1) |
 | `--seed` | None | 재현성을 위한 랜덤 시드 |
 | `--output` | `result_v{N}_c{p}.png` | 저장할 이미지 경로. 미지정 시 `result_v{vertices}_c{connectivity}.png`으로 자동 생성 |
-| `--workers` | CPU 코어 수 | 방향 조합 탐색용 스레드 수 (전수 열거 및 샘플링 모두 사용) |
-| `--chunk-size` | 2048 | 스레드 작업 단위 방향 조합 수 (전수 열거 및 샘플링 모두 사용) |
+| `--workers` | CPU 코어 수 | 방향 조합 탐색용 워커 수 (전수 열거 및 샘플링 모두 사용) |
+| `--chunk-size` | 2048 | 워커 작업 단위 방향 조합 수 (전수 열거 및 샘플링 모두 사용) |
 | `--max-samples` | None | 무작위 샘플링 모드: 최대 N개의 강연결 방향 조합을 샘플링. 지정 시 전수 열거 대신 샘플링 사용 |
+| `--processes` | False | 스레드 대신 프로세스를 사용한 병렬 실행. GIL을 우회하여 CPU 바운드 작업의 처리량을 향상 |
 
 ## 테스트 (Tests)
 
