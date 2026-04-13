@@ -125,6 +125,7 @@ def generate_strongly_connected_orientations(
 def sample_strongly_connected_orientations(
     graph: nx.Graph,
     max_samples: int,
+    min_samples: int = 0,
     seed: int | None = None,
     max_attempts: int | None = None,
 ) -> Iterator[nx.DiGraph]:
@@ -141,6 +142,11 @@ def sample_strongly_connected_orientations(
         graph: An undirected :class:`networkx.Graph`.
         max_samples: Maximum number of strongly-connected orientations to
             yield.  Must be >= 1.
+        min_samples: Minimum number of strongly-connected orientations that
+            must be found within *max_attempts*.  If fewer are found, a
+            :exc:`RuntimeError` is raised once the generator is exhausted.
+            Must be >= 0 and <= *max_samples*.  Defaults to ``0`` (no
+            minimum enforced).
         seed: Random seed for reproducibility.  If ``None``, a random seed is
             used.
         max_attempts: Maximum number of random orientations to try before
@@ -151,10 +157,19 @@ def sample_strongly_connected_orientations(
         :class:`networkx.DiGraph` instances that are strongly connected.
 
     Raises:
-        ValueError: If *max_samples* < 1 or *max_attempts* < 1.
+        ValueError: If *max_samples* < 1, *max_attempts* < 1, *min_samples*
+            < 0, or *min_samples* > *max_samples*.
+        RuntimeError: If *min_samples* > 0 and fewer than *min_samples*
+            strongly-connected orientations were found within *max_attempts*.
     """
     if max_samples < 1:
         raise ValueError(f"max_samples must be >= 1, got {max_samples}")
+    if min_samples < 0:
+        raise ValueError(f"min_samples must be >= 0, got {min_samples}")
+    if min_samples > max_samples:
+        raise ValueError(
+            f"min_samples ({min_samples}) must be <= max_samples ({max_samples})"
+        )
     if max_attempts is None:
         max_attempts = max(max_samples * 100, 1_000)
     if max_attempts < 1:
@@ -167,8 +182,16 @@ def sample_strongly_connected_orientations(
     if edge_count == 0:
         dg = nx.DiGraph()
         dg.add_nodes_from(nodes)
+        found = 0
         if len(nodes) <= 1 or nx.is_strongly_connected(dg):
+            found = 1
             yield dg
+        if found < min_samples:
+            raise RuntimeError(
+                f"Could not find {min_samples} strongly-connected orientation(s): "
+                f"found {found} (graph has no edges; the graph cannot be "
+                f"strongly connected with more than 1 node)."
+            )
         return
 
     rng = np.random.default_rng(seed)
@@ -190,3 +213,10 @@ def sample_strongly_connected_orientations(
         if nx.is_strongly_connected(dg):
             found += 1
             yield dg
+
+    if found < min_samples:
+        raise RuntimeError(
+            f"Could not find {min_samples} strongly-connected orientation(s): "
+            f"found {found} in {max_attempts} attempt(s). "
+            f"Consider increasing max_attempts."
+        )

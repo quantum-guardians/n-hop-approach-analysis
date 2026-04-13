@@ -38,6 +38,7 @@ def analyse(
     workers: int | None,
     chunk_size: int,
     max_samples: int | None = None,
+    min_samples: int = 0,
 ) -> None:
     graph = generate_graph(num_vertices, connectivity, seed=seed)
     connectivity_label = f"{connectivity}" if connectivity is not None else "Delaunay"
@@ -52,22 +53,29 @@ def analyse(
     n_orientations = 0
     if max_samples is not None:
         orientations_iter = sample_strongly_connected_orientations(
-            graph, max_samples=max_samples, seed=seed
+            graph, max_samples=max_samples, min_samples=min_samples, seed=seed
         )
-        print(f"Sampling up to {max_samples} strongly-connected orientations …")
+        msg = f"Sampling up to {max_samples} strongly-connected orientations"
+        if min_samples > 0:
+            msg += f" (minimum required: {min_samples})"
+        print(msg + " …")
     else:
         orientations_iter = generate_strongly_connected_orientations(
             graph, num_workers=workers, chunk_size=chunk_size
         )
 
-    for orientation in orientations_iter:
-        n_orientations += 1
-        apsp_sum, counts = calculate_apsp_sum_and_nhop_neighbor_counts(
-            orientation, hops=HOPS
-        )
-        apsp_sums.append(apsp_sum)
-        for hop in HOPS:
-            nhop_counts[hop].append(counts[hop])
+    try:
+        for orientation in orientations_iter:
+            n_orientations += 1
+            apsp_sum, counts = calculate_apsp_sum_and_nhop_neighbor_counts(
+                orientation, hops=HOPS
+            )
+            apsp_sums.append(apsp_sum)
+            for hop in HOPS:
+                nhop_counts[hop].append(counts[hop])
+    except RuntimeError as exc:
+        print(exc)
+        raise SystemExit(1) from exc
 
     print(f"Strongly-connected orientations found: {n_orientations}")
 
@@ -126,6 +134,12 @@ def main() -> None:
              "Yield at most this many strongly-connected orientations "
              "(constant-time regardless of graph size)."
     )
+    parser.add_argument(
+        "--min-samples", type=int, default=0,
+        help="Minimum number of strongly-connected orientations that must be "
+             "found when using --max-samples. Exits with an error if fewer are "
+             "found within the attempt budget (default: 0, i.e. no minimum)."
+    )
     args = parser.parse_args()
     analyse(
         args.vertices,
@@ -135,6 +149,7 @@ def main() -> None:
         args.workers,
         args.chunk_size,
         args.max_samples,
+        args.min_samples,
     )
 
 
