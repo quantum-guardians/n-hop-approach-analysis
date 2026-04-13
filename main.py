@@ -15,6 +15,7 @@ Run with custom parameters::
 import argparse
 import os
 import signal
+import time
 import types
 
 import matplotlib
@@ -91,6 +92,8 @@ def analyse(
         )
 
     old_handler = signal.signal(signal.SIGINT, _sigint_handler)
+    start_time = time.monotonic()
+    next_report_at = 60.0  # first progress report after 1 minute
     try:
         for orientation in orientations_iter:
             if interrupted:
@@ -102,6 +105,16 @@ def analyse(
             apsp_sums.append(apsp_sum)
             for hop in HOPS:
                 nhop_counts[hop].append(counts[hop])
+
+            # Periodic progress: print once per minute after the first minute.
+            elapsed = time.monotonic() - start_time
+            if elapsed >= next_report_at:
+                print(
+                    f"  [{elapsed / 60:.0f} min elapsed] "
+                    f"strongly-connected orientations found so far: {n_orientations}",
+                    flush=True,
+                )
+                next_report_at += 60.0
     except KeyboardInterrupt:
         # Fallback in case the signal handler did not suppress the exception
         # (e.g. when the interrupt arrived while inside a C extension).
