@@ -1,6 +1,8 @@
 """Tests for the score calculator module."""
 
 import networkx as nx
+import pytest
+
 from src.score_calculator import (
     calculate_apsp_sum,
     calculate_apsp_sum_and_nhop_neighbor_counts,

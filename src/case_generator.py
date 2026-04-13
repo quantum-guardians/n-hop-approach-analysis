@@ -28,7 +28,7 @@ def _build_strongly_connected_orientations_for_range(
     if edge_count <= 63:
         indices = np.arange(start, stop, dtype=np.uint64)
         shifts = np.arange(edge_count, dtype=np.uint64)
-        bits_matrix = ((indices[:, None] >> shifts) & 1).astype(np.uint8, copy=False)
+        bits_matrix = (indices[:, None] >> shifts) & 1
 
         for row in bits_matrix:
             dg = nx.DiGraph()
