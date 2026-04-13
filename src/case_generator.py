@@ -125,6 +125,7 @@ def generate_strongly_connected_orientations(
 def sample_strongly_connected_orientations(
     graph: nx.Graph,
     max_samples: int,
+    min_samples: int = 0,
     seed: int | None = None,
     max_attempts: int | None = None,
 ) -> Iterator[nx.DiGraph]:
@@ -137,24 +138,48 @@ def sample_strongly_connected_orientations(
     size), the runtime is effectively constant with respect to the number of
     vertices/edges.
 
+    When *min_samples* > 0 the function keeps sampling without any attempt
+    limit until at least *min_samples* orientations have been found.  Only
+    after that does *max_attempts* take effect (to cap the search for
+    additional samples up to *max_samples*).  If the graph has no
+    strongly-connected orientation at all (e.g. more than one isolated node
+    with no edges) and *min_samples* > 0 the function will loop indefinitely,
+    so callers should only set *min_samples* > 0 when the graph is known to
+    be strongly orientable.
+
     Args:
         graph: An undirected :class:`networkx.Graph`.
         max_samples: Maximum number of strongly-connected orientations to
             yield.  Must be >= 1.
+        min_samples: Minimum number of strongly-connected orientations that
+            must be found before *max_attempts* is enforced.  The function
+            keeps sampling until this many are found regardless of
+            *max_attempts*.  Must be >= 0 and <= *max_samples*.  Defaults to
+            ``0`` (no minimum enforced; *max_attempts* always applies).
         seed: Random seed for reproducibility.  If ``None``, a random seed is
             used.
-        max_attempts: Maximum number of random orientations to try before
-            stopping (to bound runtime).  Defaults to
-            ``max(max_samples * 100, 1_000)``.
+        max_attempts: Maximum number of random orientations to try *after*
+            *min_samples* has been satisfied (to bound additional sampling up
+            to *max_samples*).  Defaults to ``max(max_samples * 100, 1_000)``.
 
     Yields:
         :class:`networkx.DiGraph` instances that are strongly connected.
 
     Raises:
-        ValueError: If *max_samples* < 1 or *max_attempts* < 1.
+        ValueError: If *max_samples* < 1, *max_attempts* < 1, *min_samples*
+            < 0, or *min_samples* > *max_samples*.
+        RuntimeError: If *min_samples* > 0 and the graph has no edges and
+            more than one node (making a strongly-connected orientation
+            impossible).
     """
     if max_samples < 1:
         raise ValueError(f"max_samples must be >= 1, got {max_samples}")
+    if min_samples < 0:
+        raise ValueError(f"min_samples must be >= 0, got {min_samples}")
+    if min_samples > max_samples:
+        raise ValueError(
+            f"min_samples ({min_samples}) must be <= max_samples ({max_samples})"
+        )
     if max_attempts is None:
         max_attempts = max(max_samples * 100, 1_000)
     if max_attempts < 1:
@@ -167,15 +192,27 @@ def sample_strongly_connected_orientations(
     if edge_count == 0:
         dg = nx.DiGraph()
         dg.add_nodes_from(nodes)
+        found = 0
         if len(nodes) <= 1 or nx.is_strongly_connected(dg):
+            found = 1
             yield dg
+        if found < min_samples:
+            raise RuntimeError(
+                f"Could not find {min_samples} strongly-connected orientation(s): "
+                f"found {found} (graph has no edges; the graph cannot be "
+                f"strongly connected with more than 1 node)."
+            )
         return
 
     rng = np.random.default_rng(seed)
     found = 0
+    attempt = 0
 
-    for _ in range(max_attempts):
+    while True:
         if found >= max_samples:
+            break
+        # Enforce max_attempts only after min_samples has already been satisfied
+        if found >= min_samples and attempt >= max_attempts:
             break
 
         bits = rng.integers(0, 2, size=edge_count)
@@ -190,3 +227,5 @@ def sample_strongly_connected_orientations(
         if nx.is_strongly_connected(dg):
             found += 1
             yield dg
+
+        attempt += 1

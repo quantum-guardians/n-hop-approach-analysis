@@ -171,3 +171,67 @@ class TestSampleStronglyConnectedOrientations:
             sample_strongly_connected_orientations(g, max_samples=100, seed=7, max_attempts=1)
         )
         assert len(results) <= 1
+
+    def test_min_samples_zero_is_default(self):
+        """min_samples=0 (default) never raises even when nothing is found."""
+        results = list(
+            sample_strongly_connected_orientations(
+                _path_graph(), max_samples=10, seed=0, max_attempts=200
+            )
+        )
+        assert results == []
+
+    def test_min_samples_satisfied(self):
+        """When enough SC orientations are found, no error is raised."""
+        g = _triangle()
+        results = list(
+            sample_strongly_connected_orientations(g, max_samples=5, min_samples=1, seed=0)
+        )
+        assert len(results) >= 1
+
+    def test_min_samples_keeps_trying_past_max_attempts(self):
+        """Sampling continues past max_attempts until min_samples is reached."""
+        g = _triangle()
+        # max_attempts=1 would stop after 1 candidate, but min_samples=2 forces more sampling
+        results = list(
+            sample_strongly_connected_orientations(
+                g, max_samples=2, min_samples=2, seed=0, max_attempts=1
+            )
+        )
+        assert len(results) == 2
+
+    def test_min_samples_exceeded_max_samples_raises_value_error(self):
+        """ValueError when min_samples > max_samples."""
+        with pytest.raises(ValueError):
+            list(
+                sample_strongly_connected_orientations(
+                    _triangle(), max_samples=3, min_samples=5
+                )
+            )
+
+    def test_negative_min_samples_raises(self):
+        """ValueError when min_samples < 0."""
+        with pytest.raises(ValueError):
+            list(
+                sample_strongly_connected_orientations(
+                    _triangle(), max_samples=5, min_samples=-1
+                )
+            )
+
+    def test_min_samples_single_node_no_edges_satisfied(self):
+        """A single-node graph satisfies min_samples=1 since it yields one trivial orientation."""
+        g = nx.Graph()
+        g.add_node(0)
+        results = list(
+            sample_strongly_connected_orientations(g, max_samples=5, min_samples=1, seed=0)
+        )
+        assert len(results) == 1
+
+    def test_min_samples_multi_node_no_edges_raises(self):
+        """A graph with >1 node and no edges cannot be SC, so min_samples=1 raises."""
+        g = nx.Graph()
+        g.add_nodes_from([0, 1])
+        with pytest.raises(RuntimeError, match="Could not find"):
+            list(
+                sample_strongly_connected_orientations(g, max_samples=5, min_samples=1, seed=0)
+            )
