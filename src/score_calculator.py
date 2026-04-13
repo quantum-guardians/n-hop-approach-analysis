@@ -5,13 +5,12 @@ Provides two families of metrics for a directed graph:
 1. **APSP sum** – the sum of shortest-path lengths over all ordered pairs of
    distinct vertices.
 2. **n-hop neighbour count** – for a given hop distance *n*, the total number
-   of ordered pairs ``(source, target)`` where at least one path of exactly *n*
-   edges exists from *source* to *target* (``source != target``), summed across
-   all sources.  This is computed via the *n*-th power of the adjacency matrix:
-   ``A^n[i][j] > 0`` iff such a path exists.
+   of ordered pairs ``(source, target)`` where at least one *simple path* of
+   exactly *n* edges exists from *source* to *target* (``source != target``),
+   summed across all sources.  A simple path visits no vertex more than once.
 """
 
-from typing import Sequence
+from typing import Any, Sequence
 
 import networkx as nx
 import numpy as np
@@ -29,6 +28,39 @@ def _collect_non_self_shortest_path_lengths(graph: nx.DiGraph) -> np.ndarray:
     )
 
 
+def _dfs_simple(
+    adj: dict[Any, list],
+    node: Any,
+    depth: int,
+    target_depth: int,
+    visited: set,
+    reached: set,
+) -> None:
+    """DFS helper: collect all nodes reachable from *node* via a simple path of
+    exactly *target_depth* edges, given the current *visited* set."""
+    if depth == target_depth:
+        reached.add(node)
+        return
+    for nbr in adj.get(node, []):
+        if nbr not in visited:
+            visited.add(nbr)
+            _dfs_simple(adj, nbr, depth + 1, target_depth, visited, reached)
+            visited.remove(nbr)
+
+
+def _count_simple_path_pairs_of_length(graph: nx.DiGraph, length: int) -> int:
+    """Count ordered pairs ``(source, target)`` connected by a simple path of
+    exactly *length* edges (no vertex repeated)."""
+    adj: dict[Any, list] = {n: list(graph.successors(n)) for n in graph.nodes()}
+    total = 0
+    for source in graph.nodes():
+        reached: set = set()
+        visited: set = {source}
+        _dfs_simple(adj, source, 0, length, visited, reached)
+        total += len(reached)
+    return total
+
+
 def calculate_apsp_sum_and_nhop_neighbor_counts(
     graph: nx.DiGraph,
     hops: Sequence[int] = (2, 3, 4),
@@ -39,26 +71,9 @@ def calculate_apsp_sum_and_nhop_neighbor_counts(
     if not hops:
         return apsp_sum, {}
 
-    if graph.number_of_nodes() == 0:
-        return apsp_sum, {hop: 0 for hop in hops}
-
-    A = nx.to_numpy_array(graph)
-
-    A_bool = A != 0
-    max_hop = max(hops)
-    hops_set = set(hops)
-
-    current = A_bool.copy()  # exactly-1-hop reachability
-    counts: dict[int, int] = {}
-
-    for k in range(1, max_hop + 1):
-        if k > 1:
-            current = (current @ A_bool) > 0
-        if k in hops_set:
-            mat = current.astype(np.int64)
-            np.fill_diagonal(mat, 0)
-            counts[k] = int(mat.sum())
-
+    counts: dict[int, int] = {
+        hop: _count_simple_path_pairs_of_length(graph, hop) for hop in hops
+    }
     return apsp_sum, counts
 
 
@@ -83,10 +98,9 @@ def calculate_nhop_neighbor_counts(
     """Return the total n-hop neighbour count for all vertices at each hop distance.
 
     For each hop value *n* in *hops*, count the total number of ordered pairs
-    ``(source, target)`` where at least one path of exactly *n* edges exists
-    from *source* to *target* (``source != target``), summed over all sources.
-    This uses the *n*-th power of the adjacency matrix: a pair is counted when
-    ``A^n[source][target] > 0``.
+    ``(source, target)`` where at least one *simple path* of exactly *n* edges
+    exists from *source* to *target* (``source != target``), summed over all
+    sources.  A simple path visits no vertex more than once.
 
     Args:
         graph: A directed graph.
