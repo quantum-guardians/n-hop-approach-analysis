@@ -64,18 +64,14 @@ def analyse(
             graph, num_workers=workers, chunk_size=chunk_size
         )
 
-    try:
-        for orientation in orientations_iter:
-            n_orientations += 1
-            apsp_sum, counts = calculate_apsp_sum_and_nhop_neighbor_counts(
-                orientation, hops=HOPS
-            )
-            apsp_sums.append(apsp_sum)
-            for hop in HOPS:
-                nhop_counts[hop].append(counts[hop])
-    except RuntimeError as exc:
-        print(exc)
-        raise SystemExit(1) from exc
+    for orientation in orientations_iter:
+        n_orientations += 1
+        apsp_sum, counts = calculate_apsp_sum_and_nhop_neighbor_counts(
+            orientation, hops=HOPS
+        )
+        apsp_sums.append(apsp_sum)
+        for hop in HOPS:
+            nhop_counts[hop].append(counts[hop])
 
     print(f"Strongly-connected orientations found: {n_orientations}")
 

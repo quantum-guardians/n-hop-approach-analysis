@@ -189,15 +189,16 @@ class TestSampleStronglyConnectedOrientations:
         )
         assert len(results) >= 1
 
-    def test_min_samples_not_satisfied_raises(self):
-        """RuntimeError is raised when fewer than min_samples orientations are found."""
-        with pytest.raises(RuntimeError, match="Could not find"):
-            list(
-                sample_strongly_connected_orientations(
-                    _path_graph(), max_samples=10, min_samples=1,
-                    seed=0, max_attempts=200
-                )
+    def test_min_samples_keeps_trying_past_max_attempts(self):
+        """Sampling continues past max_attempts until min_samples is reached."""
+        g = _triangle()
+        # max_attempts=1 would stop after 1 candidate, but min_samples=2 forces more sampling
+        results = list(
+            sample_strongly_connected_orientations(
+                g, max_samples=2, min_samples=2, seed=0, max_attempts=1
             )
+        )
+        assert len(results) == 2
 
     def test_min_samples_exceeded_max_samples_raises_value_error(self):
         """ValueError when min_samples > max_samples."""
