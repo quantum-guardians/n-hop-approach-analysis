@@ -334,3 +334,100 @@ class TestSampleStronglyConnectedOrientationsParallel:
         )
         for dg in results:
             assert nx.is_strongly_connected(dg)
+
+
+class TestGenerateStronglyConnectedOrientationsProcesses:
+    """Tests that the process-based (use_processes=True) exhaustive path is correct."""
+
+    def test_process_triangle_count(self):
+        """ProcessPoolExecutor path still finds exactly 2 SC orientations for triangle."""
+        results = list(
+            generate_strongly_connected_orientations(
+                _triangle(), num_workers=2, use_processes=True
+            )
+        )
+        assert len(results) == 2
+
+    def test_process_all_strongly_connected(self):
+        """Every orientation from the process path is strongly connected."""
+        for dg in generate_strongly_connected_orientations(
+            _triangle(), num_workers=2, use_processes=True
+        ):
+            assert nx.is_strongly_connected(dg)
+
+    def test_process_matches_single_thread(self):
+        """Process-based results match single-threaded results."""
+        g = _triangle()
+        single = list(generate_strongly_connected_orientations(g, num_workers=1))
+        multi_proc = list(
+            generate_strongly_connected_orientations(g, num_workers=2, use_processes=True)
+        )
+        assert len(single) == len(multi_proc)
+        assert {frozenset(dg.edges()) for dg in single} == {
+            frozenset(dg.edges()) for dg in multi_proc
+        }
+
+    def test_process_path_graph_yields_nothing(self):
+        """A path graph has no SC orientation; process path also yields nothing."""
+        results = list(
+            generate_strongly_connected_orientations(
+                _path_graph(), num_workers=2, use_processes=True
+            )
+        )
+        assert results == []
+
+
+class TestSampleStronglyConnectedOrientationsProcesses:
+    """Tests that the process-based (use_processes=True) sampling path is correct."""
+
+    def test_process_returns_digraphs(self):
+        """All yielded objects are DiGraph instances with use_processes=True."""
+        for dg in sample_strongly_connected_orientations(
+            _triangle(), max_samples=5, seed=0, num_workers=2, use_processes=True
+        ):
+            assert isinstance(dg, nx.DiGraph)
+
+    def test_process_all_strongly_connected(self):
+        """Every orientation yielded by the process path is strongly connected."""
+        for dg in sample_strongly_connected_orientations(
+            _triangle(), max_samples=10, seed=1, num_workers=2, use_processes=True
+        ):
+            assert nx.is_strongly_connected(dg)
+
+    def test_process_max_samples_respected(self):
+        """use_processes=True never yields more than max_samples orientations."""
+        results = list(
+            sample_strongly_connected_orientations(
+                _triangle(), max_samples=1, seed=4, num_workers=2, use_processes=True
+            )
+        )
+        assert len(results) <= 1
+
+    def test_process_path_graph_yields_nothing(self):
+        """A path graph has no SC orientation; process path also yields nothing."""
+        results = list(
+            sample_strongly_connected_orientations(
+                _path_graph(), max_samples=10, seed=0, max_attempts=200,
+                num_workers=2, use_processes=True
+            )
+        )
+        assert results == []
+
+    def test_process_min_samples_satisfied(self):
+        """Process path honours min_samples."""
+        g = _triangle()
+        results = list(
+            sample_strongly_connected_orientations(
+                g, max_samples=5, min_samples=2, seed=0,
+                num_workers=2, use_processes=True
+            )
+        )
+        assert len(results) >= 2
+
+    def test_process_preserves_nodes(self):
+        g = _triangle()
+        for dg in sample_strongly_connected_orientations(
+            g, max_samples=5, seed=2, num_workers=2, use_processes=True
+        ):
+            assert set(dg.nodes()) == set(g.nodes())
+

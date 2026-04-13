@@ -10,9 +10,10 @@ For large graphs, :func:`sample_strongly_connected_orientations` can be used
 to draw a bounded random sample instead of exhaustively checking all 2^m cases.
 """
 
+import functools
 import os
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from typing import Iterator
 
 import networkx as nx
@@ -92,6 +93,7 @@ def generate_strongly_connected_orientations(
     graph: nx.Graph,
     num_workers: int | None = None,
     chunk_size: int = 2048,
+    use_processes: bool = False,
 ) -> Iterator[nx.DiGraph]:
     """Yield all strongly-connected orientations of *graph*.
 
@@ -101,9 +103,14 @@ def generate_strongly_connected_orientations(
 
     Args:
         graph: An undirected :class:`networkx.Graph`.
-        num_workers: Number of worker threads for orientation checks. If
-            ``None``, uses CPU core count.
+        num_workers: Number of worker threads or processes for orientation
+            checks.  If ``None``, uses CPU core count.
         chunk_size: Number of orientation bitmasks processed per task.
+        use_processes: When ``True``, use a
+            :class:`~concurrent.futures.ProcessPoolExecutor` instead of a
+            :class:`~concurrent.futures.ThreadPoolExecutor`.  Process-based
+            parallelism bypasses the GIL and can improve throughput on
+            CPU-bound workloads.  Defaults to ``False`` (thread-based).
 
     Yields:
         :class:`networkx.DiGraph` instances that are strongly connected.
@@ -141,14 +148,13 @@ def generate_strongly_connected_orientations(
                 yield dg
         return
 
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = executor.map(
-            lambda start: _build_strongly_connected_orientations_for_range(
-                nodes, edges, start, min(start + chunk_size, total_orientations)
-            ),
-            starts,
-        )
-        for result in futures:
+    stops = [min(s + chunk_size, total_orientations) for s in starts]
+    _worker = functools.partial(
+        _build_strongly_connected_orientations_for_range, nodes, edges
+    )
+    executor_class = ProcessPoolExecutor if use_processes else ThreadPoolExecutor
+    with executor_class(max_workers=workers) as executor:
+        for result in executor.map(_worker, starts, stops):
             for dg in result:
                 yield dg
 
@@ -161,6 +167,7 @@ def sample_strongly_connected_orientations(
     max_attempts: int | None = None,
     num_workers: int | None = None,
     chunk_size: int = 64,
+    use_processes: bool = False,
 ) -> Iterator[nx.DiGraph]:
     """Yield up to *max_samples* strongly-connected orientations via random sampling.
 
@@ -182,8 +189,10 @@ def sample_strongly_connected_orientations(
 
     When *num_workers* > 1 (or ``None``, which defaults to the CPU core count)
     random-candidate batches are evaluated in parallel using a
-    :class:`~concurrent.futures.ThreadPoolExecutor`, which can substantially
-    reduce wall-clock time for large *max_samples* or *max_attempts* values.
+    :class:`~concurrent.futures.ThreadPoolExecutor` (default) or a
+    :class:`~concurrent.futures.ProcessPoolExecutor` (when *use_processes* is
+    ``True``), which can substantially reduce wall-clock time for large
+    *max_samples* or *max_attempts* values.
 
     Args:
         graph: An undirected :class:`networkx.Graph`.
@@ -199,15 +208,20 @@ def sample_strongly_connected_orientations(
         max_attempts: Maximum number of random orientations to try *after*
             *min_samples* has been satisfied (to bound additional sampling up
             to *max_samples*).  Defaults to ``max(max_samples * 100, 1_000)``.
-        num_workers: Number of worker threads for parallel candidate
-            evaluation.  If ``None``, uses the CPU core count.  Set to ``1``
-            to disable parallelism.
+        num_workers: Number of worker threads or processes for parallel
+            candidate evaluation.  If ``None``, uses the CPU core count.  Set
+            to ``1`` to disable parallelism.
         chunk_size: Number of random orientations generated and evaluated per
             worker task.  Larger values reduce task-submission overhead but
             may cause the function to exceed *max_attempts* by up to
             ``num_workers * chunk_size`` candidates.  Defaults to ``64``.
             When called via the CLI the ``--chunk-size`` flag overrides this
             default (the CLI default is ``2048``).
+        use_processes: When ``True``, use a
+            :class:`~concurrent.futures.ProcessPoolExecutor` instead of a
+            :class:`~concurrent.futures.ThreadPoolExecutor`.  Process-based
+            parallelism bypasses the GIL and can improve throughput on
+            CPU-bound workloads.  Defaults to ``False`` (thread-based).
 
     Yields:
         :class:`networkx.DiGraph` instances that are strongly connected.
@@ -282,11 +296,12 @@ def sample_strongly_connected_orientations(
             attempt += 1
         return
 
-    # --- Parallel sampling via ThreadPoolExecutor ---
+    # --- Parallel sampling via ThreadPoolExecutor or ProcessPoolExecutor ---
     # We maintain a sliding window of in-flight futures.  After each future
     # completes we decide whether to submit another batch or simply drain the
     # remaining in-flight work and stop.
-    with ThreadPoolExecutor(max_workers=workers) as executor:
+    executor_class = ProcessPoolExecutor if use_processes else ThreadPoolExecutor
+    with executor_class(max_workers=workers) as executor:
         pending: deque = deque()
 
         def _submit_batch() -> None:

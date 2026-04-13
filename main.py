@@ -39,6 +39,7 @@ def analyse(
     chunk_size: int,
     max_samples: int | None = None,
     min_samples: int = 0,
+    use_processes: bool = False,
 ) -> None:
     graph = generate_graph(num_vertices, connectivity, seed=seed)
     connectivity_label = f"{connectivity}" if connectivity is not None else "Delaunay"
@@ -59,6 +60,7 @@ def analyse(
             seed=seed,
             num_workers=workers,
             chunk_size=chunk_size,
+            use_processes=use_processes,
         )
         msg = f"Sampling up to {max_samples} strongly-connected orientations"
         if min_samples > 0:
@@ -66,7 +68,8 @@ def analyse(
         print(msg + " …")
     else:
         orientations_iter = generate_strongly_connected_orientations(
-            graph, num_workers=workers, chunk_size=chunk_size
+            graph, num_workers=workers, chunk_size=chunk_size,
+            use_processes=use_processes,
         )
 
     for orientation in orientations_iter:
@@ -122,7 +125,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--workers", type=int, default=None,
-        help="Thread workers for orientation generation "
+        help="Worker count for orientation generation "
              "(default: CPU core count)"
     )
     parser.add_argument(
@@ -134,6 +137,12 @@ def main() -> None:
         help="Use random sampling instead of exhaustive search. "
              "Yield at most this many strongly-connected orientations "
              "(constant-time regardless of graph size)."
+    )
+    parser.add_argument(
+        "--processes", action="store_true", default=False,
+        help="Use multiple processes instead of threads for parallel "
+             "orientation evaluation. Bypasses the GIL for better CPU-bound "
+             "throughput (default: False, i.e. thread-based)."
     )
     parser.add_argument(
         "--min-samples", type=int, default=0,
@@ -151,6 +160,7 @@ def main() -> None:
         args.chunk_size,
         args.max_samples,
         args.min_samples,
+        args.processes,
     )
 
 
