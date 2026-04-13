@@ -32,7 +32,7 @@ HOPS = (2, 3, 4)
 
 def analyse(
     num_vertices: int,
-    connectivity: float,
+    connectivity: float | None,
     seed: int | None,
     output: str | None,
     workers: int | None,
@@ -40,9 +40,10 @@ def analyse(
     max_samples: int | None = None,
 ) -> None:
     graph = generate_graph(num_vertices, connectivity, seed=seed)
+    connectivity_label = f"{connectivity}" if connectivity is not None else "Delaunay"
     print(
         f"Graph: {num_vertices} vertices, {graph.number_of_edges()} edges "
-        f"(connectivity={connectivity})"
+        f"(connectivity={connectivity_label})"
     )
 
     apsp_sums: list[float] = []
@@ -75,10 +76,10 @@ def analyse(
         return
 
     title = (
-        f"n={num_vertices} vertices, p={connectivity} "
+        f"n={num_vertices} vertices, p={connectivity_label} "
         f"({graph.number_of_edges()} edges, {n_orientations} orientations)"
     )
-    save_path = output or f"result_v{num_vertices}_c{connectivity}.png"
+    save_path = output or f"result_v{num_vertices}_{connectivity_label}.png"
     plot_score_correlations(
         apsp_sums,
         nhop_counts,
@@ -97,8 +98,9 @@ def main() -> None:
         help="Number of vertices (default: 5)"
     )
     parser.add_argument(
-        "--connectivity", type=float, default=0.6,
-        help="Edge probability 0–1 (default: 0.6)"
+        "--connectivity", type=float, default=None,
+        help="Edge probability 0–1 for Erdős–Rényi model. "
+             "If omitted, a Delaunay-based planar graph is generated instead."
     )
     parser.add_argument(
         "--seed", type=int, default=None,
