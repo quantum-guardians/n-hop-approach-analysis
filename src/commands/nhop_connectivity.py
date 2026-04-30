@@ -1,7 +1,7 @@
 """``nhop-connectivity`` subcommand – n-hop count vs SC ratio analysis.
 
-Generates multiple random Delaunay planar graphs, randomly samples
-orientation combinations, and plots the SC ratio per distinct n-hop
+Generates multiple random Delaunay planar graphs, directly generates
+random orientations, and plots the SC ratio per distinct n-hop
 neighbour count value bucket.
 """
 
@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import argparse
 import os
-import random
 
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend when saving to file
 
 import networkx as nx
+import numpy as np
 
 from src.graph_generator import generate_graph
 from src.score_calculator import calculate_apsp_sum_and_nhop_neighbor_counts
@@ -26,7 +26,7 @@ NHOP_CONN_HOPS = (2, 3)
 # When the number of distinct n-hop count values (x-axis points) exceeds this
 # threshold, the values are grouped into this many equal-width bins so the
 # plot remains readable.
-_SPECTRUM_BIN_THRESHOLD = 100
+_SPECTRUM_BIN_THRESHOLD = 20
 
 
 def _bin_nhop_buckets(
@@ -79,12 +79,12 @@ def run(
     seed: int | None,
     output: str | None,
 ) -> None:
-    """Generate Delaunay graphs, sample orientations, and plot n-hop vs SC ratio.
+    """Generate Delaunay graphs, generate random orientations, and plot n-hop vs SC ratio.
 
     For each generated planar graph:
 
-    1. Randomly samples *num_orientations* orientation combinations (bit-masks
-       over the edge set).  Each sampled orientation is either strongly
+    1. Directly generates *num_orientations* random orientations (bit-masks
+       over the edge set). Each sampled orientation is either strongly
        connected or not.
     2. For each sampled orientation computes the 2-hop and 3-hop neighbour
        counts and records whether the orientation is strongly connected.
@@ -92,8 +92,8 @@ def run(
        ratio per group:
        SC ratio = (SC orientations in group) / (all sampled orientations in group)
 
-    When the n-hop spectrum is wide (> 100 distinct values), counts are
-    grouped into 100 equal-width bins and the weighted SC ratio is shown per
+    When the n-hop spectrum is wide (> 20 distinct values), counts are
+    grouped into 20 equal-width bins and the weighted SC ratio is shown per
     bin.
 
     The result is plotted as a scatter plot with n-hop count on the x-axis
@@ -102,7 +102,7 @@ def run(
     Args:
         num_vertices: Number of vertices in each generated Delaunay graph.
         num_graphs: Number of random planar graphs to generate.
-        num_orientations: Number of orientation combinations to sample per graph.
+        num_orientations: Number of random orientations to generate per graph.
         seed: Base random seed.  Graph *i* uses ``seed + i`` when set.
         output: File path to save the plot.  Auto-generated if ``None``.
     """
@@ -125,23 +125,20 @@ def run(
         edges = list(graph.edges())
         nodes = list(graph.nodes())
         edge_count = len(edges)
-        total_orientations = 1 << edge_count
-
-        rng = random.Random(graph_seed)
-        sample_size = min(num_orientations, total_orientations)
-        sampled_indices = rng.sample(range(total_orientations), sample_size)
+        rng = np.random.default_rng(graph_seed)
+        sample_size = num_orientations
 
         sc_count = 0
         dg = nx.DiGraph()
         dg.add_nodes_from(nodes)
 
-        for idx in sampled_indices:
+        for bits in rng.integers(0, 2, size=(sample_size, edge_count), dtype=np.int8):
             dg.clear_edges()
-            for edge_idx, (u, v) in enumerate(edges):
-                if (idx >> edge_idx) & 1:
-                    dg.add_edge(v, u)
-                else:
+            for bit, (u, v) in zip(bits, edges):
+                if bit == 0:
                     dg.add_edge(u, v)
+                else:
+                    dg.add_edge(v, u)
 
             is_sc = nx.is_strongly_connected(dg)
             _, counts = calculate_apsp_sum_and_nhop_neighbor_counts(dg, hops=hops)
@@ -188,12 +185,12 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ig
         "nhop-connectivity",
         help="Compare 2-hop / 3-hop counts and SC ratio across multiple planar graphs.",
         description=(
-            "Generate multiple random Delaunay planar graphs, randomly sample "
-            "their orientation combinations, and plot the SC ratio "
+            "Generate multiple random Delaunay planar graphs, directly "
+            "generate random orientations for each graph, and plot the SC ratio "
             "(SC orientations / total sampled orientations) per distinct n-hop "
             "neighbour count value — for both 2-hop and 3-hop distances. "
-            "When the n-hop spectrum is wide (> 100 distinct values), counts "
-            "are grouped into 100 equal-width bins automatically."
+            "When the n-hop spectrum is wide (> 20 distinct values), counts "
+            "are grouped into 20 equal-width bins automatically."
         ),
     )
     p.add_argument(
@@ -206,8 +203,8 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ig
     )
     p.add_argument(
         "--num-orientations", type=int, default=200,
-        help="Number of random orientation combinations to sample per graph "
-             "(default: 200). Capped at 2^|E| automatically."
+        help="Number of random orientations to generate per graph "
+             "(default: 200)."
     )
     p.add_argument(
         "--seed", type=int, default=None,
