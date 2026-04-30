@@ -59,41 +59,33 @@ python main.py analyse --vertices 10 --connectivity 0.5 --seed 42 --max-samples 
 
 ### `nhop-connectivity` – 2-hop·3-hop 수와 강연결 비율 비교
 
-여러 랜덤 그래프를 생성하고, 각 그래프의 **강연결(SC) 비율**
-(강연결 방향 그래프 수 / 전체 방향 조합 수 = SC / 2^|E|)과
-**평균 2-hop·3-hop 이웃 수**를 비교하는 산점도를 그립니다.
+여러 Delaunay 평면 그래프를 생성하고, 각 그래프의 **모든** 방향 조합을 전수 열거합니다.
+각 방향 조합에 대해 2-hop / 3-hop 이웃 수를 계산하고, 동일한 n-hop 값을 가진 방향 조합들 중
+**강연결(SC)인 비율**을 y축에, **n-hop 이웃 수**를 x축에 표시하는 산점도를 그립니다.
+
+> **연결성 비율 정의**: n-hop 이웃 수가 `k`인 방향 조합 중 강연결인 방향 조합의 비율
+> = (n-hop 수가 k이고 강연결인 방향 조합 수) / (n-hop 수가 k인 전체 방향 조합 수)
 
 ```bash
-# 기본 실행 (5 정점, 연결성 0.3–0.9 범위, 20개 그래프)
+# 기본 실행 (5 정점, 20개 Delaunay 그래프)
 python main.py nhop-connectivity
 
 # 파라미터 지정
-python main.py nhop-connectivity --vertices 5 --num-graphs 30 \
-    --connectivity-min 0.2 --connectivity-max 0.9 --seed 42 --output nhop.png
-
-# 멀티스레드 병렬 실행
-python main.py nhop-connectivity --vertices 5 --num-graphs 20 \
-    --seed 0 --workers 4 --output nhop_conn.png
+python main.py nhop-connectivity --vertices 5 --num-graphs 30 --seed 42 --output nhop.png
 ```
 
 #### `nhop-connectivity` CLI 옵션
 
 | 옵션 | 기본값 | 설명 |
 |---|---|---|
-| `--vertices` | 5 | 각 그래프의 정점 수 |
-| `--num-graphs` | 20 | 생성할 그래프 수 (산점도의 데이터 포인트 수) |
-| `--connectivity-min` | 0.3 | 연결성 스윕 최솟값 |
-| `--connectivity-max` | 0.9 | 연결성 스윕 최댓값 |
+| `--vertices` | 5 | 각 Delaunay 그래프의 정점 수 |
+| `--num-graphs` | 20 | 생성할 그래프 수 |
 | `--seed` | None | 기본 랜덤 시드. 그래프 i는 seed+i 사용 |
 | `--output` | `nhop_connectivity_v{N}.png` | 저장할 이미지 경로 |
-| `--workers` | CPU 코어 수 | 방향 조합 탐색용 워커 수 |
-| `--chunk-size` | 2048 | 워커 작업 단위 방향 조합 수 |
-| `--processes` | False | 스레드 대신 프로세스를 사용한 병렬 실행 |
-| `--adaptive-chunk-size` | False | 전체 작업량과 워커 수에 따라 청크 사이즈 자동 계산 |
 
 > **참고**: `nhop-connectivity` 는 전수 열거(exhaustive enumeration)를 사용합니다.
 > 간선 수가 많아 전체 방향 조합이 2^20(≈ 100만)을 초과하면 해당 그래프는 건너뜁니다.
-> 이 경우 정점 수를 줄이거나 연결성 범위를 낮추십시오.
+> 이 경우 정점 수를 줄이십시오.
 
 ## 테스트 (Tests)
 

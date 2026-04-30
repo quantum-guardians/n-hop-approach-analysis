@@ -61,25 +61,30 @@ def plot_score_correlations(
 
 
 def plot_nhop_connectivity_comparison(
-    sc_ratios: Sequence[float],
-    nhop_avgs: dict[int, Sequence[float]],
-    title: str = "N-hop Count vs Connectivity",
+    nhop_counts: dict[int, Sequence[int | float]],
+    sc_ratios: dict[int, Sequence[float]],
+    title: str = "N-hop Count vs SC Ratio",
     save_path: str | None = None,
 ) -> plt.Figure:
-    """Draw scatter plots comparing avg n-hop neighbour counts and SC ratio.
+    """Draw scatter plots comparing n-hop neighbour counts and SC ratio.
 
-    One subplot is created per hop value.  The x-axis shows the
-    strongly-connected orientation ratio (SC orientations / total orientations)
-    and the y-axis shows the average n-hop neighbour count across all
-    strongly-connected orientations for that graph.
+    One subplot is created per hop value.  The x-axis shows distinct n-hop
+    neighbour count values and the y-axis shows the SC ratio for orientations
+    that have that n-hop count.
 
-    Each data point represents one undirected graph instance.
+    The SC ratio for a given n-hop count value *k* is defined as:
+    (number of orientations with n-hop count = k that are strongly connected) /
+    (total number of orientations with n-hop count = k).
+
+    Each data point on the scatter plot represents a distinct n-hop count
+    value, aggregated across all generated graphs and their orientations.
 
     Args:
-        sc_ratios: Strongly-connected orientation ratio for each graph
-            (SC count / total orientations).
-        nhop_avgs: Mapping from hop distance to a list of average n-hop
-            neighbour counts, one per graph (same order as *sc_ratios*).
+        nhop_counts: Mapping from hop distance to a sequence of distinct n-hop
+            count values (x-axis), one entry per distinct bucket.
+        sc_ratios: Mapping from hop distance to the corresponding SC ratios
+            (y-axis), one entry per distinct n-hop count bucket (same order as
+            *nhop_counts*).
         title: Super-title displayed above the figure.
         save_path: If provided, the figure is saved to this file path instead
             of being displayed interactively.
@@ -87,7 +92,7 @@ def plot_nhop_connectivity_comparison(
     Returns:
         The :class:`matplotlib.figure.Figure` that was created.
     """
-    hops = sorted(nhop_avgs.keys())
+    hops = sorted(nhop_counts.keys())
     n_plots = len(hops)
 
     fig = plt.figure(figsize=(5 * n_plots, 4))
@@ -96,10 +101,10 @@ def plot_nhop_connectivity_comparison(
 
     for idx, hop in enumerate(hops):
         ax = fig.add_subplot(gs[0, idx])
-        ax.scatter(sc_ratios, nhop_avgs[hop], alpha=0.7, edgecolors="none", s=40)
-        ax.set_xlabel("SC ratio (strongly-connected / total)")
-        ax.set_ylabel(f"avg {hop}-hop neighbour count")
-        ax.set_title(f"{hop}-hop vs SC ratio")
+        ax.scatter(nhop_counts[hop], sc_ratios[hop], alpha=0.7, edgecolors="none", s=40)
+        ax.set_xlabel(f"{hop}-hop neighbour count")
+        ax.set_ylabel("SC ratio (strongly-connected / total)")
+        ax.set_title(f"{hop}-hop count vs SC ratio")
 
     fig.tight_layout()
 

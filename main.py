@@ -30,6 +30,8 @@ import types
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend when saving to file
 
+import networkx as nx
+
 from src.graph_generator import generate_graph
 from src.case_generator import (
     generate_strongly_connected_orientations,
@@ -165,113 +167,104 @@ def analyse(
 def analyse_nhop_connectivity(
     num_vertices: int,
     num_graphs: int,
-    connectivity_min: float,
-    connectivity_max: float,
     seed: int | None,
     output: str | None,
-    workers: int | None,
-    chunk_size: int,
-    use_processes: bool = False,
-    adaptive_chunk_size: bool = False,
 ) -> None:
-    """Generate multiple random graphs and compare n-hop counts with SC ratio.
+    """Generate multiple Delaunay planar graphs and compare n-hop counts with SC ratio.
 
-    For each graph in a sweep over edge-probability values (from
-    *connectivity_min* to *connectivity_max*), this function:
+    For each generated planar graph this function:
 
-    1. Generates a random undirected graph.
-    2. Exhaustively enumerates all strongly-connected orientations.
-    3. Computes the SC ratio (SC orientations / total orientations = 2^|E|).
-    4. Averages the 2-hop and 3-hop neighbour counts across SC orientations.
+    1. Enumerates **all** 2^|E| orientations (both strongly-connected and not).
+    2. For each orientation computes the 2-hop and 3-hop neighbour counts and
+       records whether the orientation is strongly connected.
+    3. Groups orientations by their n-hop count and computes the SC ratio per
+       group: SC ratio = SC orientations in group / all orientations in group.
 
-    The collected data is then visualised as a scatter plot with SC ratio on
-    the x-axis and average n-hop count on the y-axis (one subplot per hop).
+    The result is plotted as a scatter plot with n-hop count on the x-axis
+    and SC ratio on the y-axis (one subplot per hop distance).
 
     Args:
-        num_vertices: Number of vertices in each generated graph.
-        num_graphs: Number of graphs to generate (data points in the plot).
-        connectivity_min: Minimum edge probability for the sweep.
-        connectivity_max: Maximum edge probability for the sweep.
+        num_vertices: Number of vertices in each generated Delaunay graph.
+        num_graphs: Number of random planar graphs to generate.
         seed: Base random seed.  Graph *i* uses seed ``seed + i`` when set.
         output: File path to save the plot.  Auto-generated if ``None``.
-        workers: Worker count for orientation enumeration.
-        chunk_size: Orientation chunk size per worker task.
-        use_processes: Use :class:`~concurrent.futures.ProcessPoolExecutor`
-            instead of threads.
-        adaptive_chunk_size: Compute chunk size automatically based on workload.
     """
     hops = NHOP_CONN_HOPS
 
-    sc_ratios: list[float] = []
-    nhop_avgs: dict[int, list[float]] = {hop: [] for hop in hops}
-
-    if num_graphs == 1:
-        connectivity_values = [connectivity_min]
-    else:
-        step = (connectivity_max - connectivity_min) / (num_graphs - 1)
-        connectivity_values = [connectivity_min + i * step for i in range(num_graphs)]
+    # nhop_bucket_total[hop][count] = total orientations with that n-hop count
+    # nhop_bucket_sc[hop][count]    = SC orientations with that n-hop count
+    nhop_bucket_total: dict[int, dict[int, int]] = {hop: {} for hop in hops}
+    nhop_bucket_sc: dict[int, dict[int, int]] = {hop: {} for hop in hops}
 
     print(
-        f"Analysing {num_graphs} graphs ({num_vertices} vertices, "
-        f"connectivity {connectivity_min:.2f}–{connectivity_max:.2f}) …"
+        f"Analysing {num_graphs} Delaunay planar graphs ({num_vertices} vertices) …"
     )
 
-    for i, conn in enumerate(connectivity_values):
+    for i in range(num_graphs):
         graph_seed = (seed + i) if seed is not None else None
-        graph = generate_graph(num_vertices, conn, seed=graph_seed)
+        graph = generate_graph(num_vertices, connectivity=None, seed=graph_seed)
 
-        edge_count = graph.number_of_edges()
+        edges = list(graph.edges())
+        nodes = list(graph.nodes())
+        edge_count = len(edges)
         total_orientations = 1 << edge_count
 
         if total_orientations > MAX_EXHAUSTIVE_ORIENTATIONS:
             print(
-                f"  Graph {i + 1}/{num_graphs}: conn={conn:.2f}, "
-                f"edges={edge_count}: too many orientations "
-                f"({total_orientations:,}), skipping – "
-                f"use fewer vertices or a lower connectivity range."
+                f"  Graph {i + 1}/{num_graphs}: {edge_count} edges, "
+                f"too many orientations ({total_orientations:,}), skipping – "
+                f"use fewer vertices."
             )
             continue
 
         sc_count = 0
-        nhop_sums: dict[int, float] = {hop: 0.0 for hop in hops}
+        for idx in range(total_orientations):
+            dg = nx.DiGraph()
+            dg.add_nodes_from(nodes)
+            for edge_idx, (u, v) in enumerate(edges):
+                if (idx >> edge_idx) & 1:
+                    dg.add_edge(v, u)
+                else:
+                    dg.add_edge(u, v)
 
-        for orientation in generate_strongly_connected_orientations(
-            graph,
-            num_workers=workers,
-            chunk_size=chunk_size,
-            use_processes=use_processes,
-            adaptive_chunk_size=adaptive_chunk_size,
-        ):
-            sc_count += 1
-            _, counts = calculate_apsp_sum_and_nhop_neighbor_counts(
-                orientation, hops=hops
-            )
+            is_sc = nx.is_strongly_connected(dg)
+            _, counts = calculate_apsp_sum_and_nhop_neighbor_counts(dg, hops=hops)
+
             for hop in hops:
-                nhop_sums[hop] += counts[hop]
+                c = counts[hop]
+                nhop_bucket_total[hop][c] = nhop_bucket_total[hop].get(c, 0) + 1
+                if is_sc:
+                    nhop_bucket_sc[hop][c] = nhop_bucket_sc[hop].get(c, 0) + 1
 
-        sc_ratio = sc_count / total_orientations if total_orientations > 0 else 0.0
-        sc_ratios.append(sc_ratio)
-        for hop in hops:
-            nhop_avgs[hop].append(nhop_sums[hop] / sc_count if sc_count > 0 else 0.0)
+            if is_sc:
+                sc_count += 1
 
         print(
-            f"  Graph {i + 1}/{num_graphs}: conn={conn:.2f}, "
-            f"edges={edge_count}, SC={sc_count}/{total_orientations} "
-            f"(ratio={sc_ratio:.3f})"
+            f"  Graph {i + 1}/{num_graphs}: edges={edge_count}, "
+            f"SC={sc_count}/{total_orientations}"
         )
 
-    if not sc_ratios:
+    if not any(nhop_bucket_total[hop] for hop in hops):
         print("No valid graphs to plot.")
         return
 
+    # Convert buckets to sorted lists for the scatter plot
+    nhop_x: dict[int, list[int]] = {}
+    sc_ratio_y: dict[int, list[float]] = {}
+    for hop in hops:
+        sorted_counts = sorted(nhop_bucket_total[hop].keys())
+        nhop_x[hop] = sorted_counts
+        sc_ratio_y[hop] = [
+            nhop_bucket_sc[hop].get(c, 0) / nhop_bucket_total[hop][c]
+            for c in sorted_counts
+        ]
+
     title = (
-        f"N-hop vs SC-ratio  (n={num_vertices} vertices, "
-        f"{len(sc_ratios)} graphs)"
+        f"N-hop Count vs SC Ratio  "
+        f"(n={num_vertices} vertices, {num_graphs} Delaunay graphs)"
     )
     save_path = output or f"nhop_connectivity_v{num_vertices}.png"
-    plot_nhop_connectivity_comparison(
-        sc_ratios, nhop_avgs, title=title, save_path=save_path
-    )
+    plot_nhop_connectivity_comparison(nhop_x, sc_ratio_y, title=title, save_path=save_path)
     print(f"Plot saved to: {os.path.abspath(save_path)}")
 
 
@@ -357,30 +350,21 @@ def main() -> None:
     # ------------------------------------------------------------------ #
     nhop_parser = subparsers.add_parser(
         "nhop-connectivity",
-        help="Compare 2-hop / 3-hop counts and SC ratio across multiple graphs.",
+        help="Compare 2-hop / 3-hop counts and SC ratio across multiple planar graphs.",
         description=(
-            "Sweep the edge-probability parameter over a range, generate one "
-            "random graph per step, exhaustively enumerate its strongly-connected "
-            "orientations, and plot average 2-hop and 3-hop neighbour counts "
-            "against the SC ratio (strongly-connected / total orientations)."
+            "Generate multiple random Delaunay planar graphs, enumerate all "
+            "their orientations, and plot the SC ratio (SC orientations / total "
+            "orientations) per distinct n-hop neighbour count value — for both "
+            "2-hop and 3-hop distances."
         ),
     )
     nhop_parser.add_argument(
         "--vertices", type=int, default=5,
-        help="Number of vertices in each generated graph (default: 5)"
+        help="Number of vertices in each generated Delaunay graph (default: 5)"
     )
     nhop_parser.add_argument(
         "--num-graphs", type=int, default=20,
-        help="Number of graphs to generate across the connectivity sweep "
-             "(default: 20)"
-    )
-    nhop_parser.add_argument(
-        "--connectivity-min", type=float, default=0.3,
-        help="Minimum edge probability for the sweep (default: 0.3)"
-    )
-    nhop_parser.add_argument(
-        "--connectivity-max", type=float, default=0.9,
-        help="Maximum edge probability for the sweep (default: 0.9)"
+        help="Number of Delaunay planar graphs to generate (default: 20)"
     )
     nhop_parser.add_argument(
         "--seed", type=int, default=None,
@@ -391,7 +375,6 @@ def main() -> None:
         help="File path to save the plot (e.g. nhop.png). "
              "If omitted, defaults to nhop_connectivity_v{vertices}.png."
     )
-    _add_shared_parallel_args(nhop_parser)
 
     # ------------------------------------------------------------------ #
     # Dispatch                                                             #
@@ -415,14 +398,8 @@ def main() -> None:
         analyse_nhop_connectivity(
             args.vertices,
             args.num_graphs,
-            args.connectivity_min,
-            args.connectivity_max,
             args.seed,
             args.output,
-            args.workers,
-            args.chunk_size,
-            args.processes,
-            args.adaptive_chunk_size,
         )
 
 

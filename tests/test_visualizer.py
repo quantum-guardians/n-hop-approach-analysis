@@ -56,8 +56,8 @@ class TestPlotScoreCorrelations:
 class TestPlotNhopConnectivityComparison:
     def test_returns_figure(self):
         fig = plot_nhop_connectivity_comparison(
-            sc_ratios=[0.1, 0.3, 0.5],
-            nhop_avgs={2: [1.0, 2.0, 3.0], 3: [0.5, 1.0, 1.5]},
+            nhop_counts={2: [1, 2, 3], 3: [0, 1, 2]},
+            sc_ratios={2: [0.1, 0.3, 0.5], 3: [0.0, 0.2, 0.4]},
             title="Test",
             save_path=None,
         )
@@ -65,21 +65,22 @@ class TestPlotNhopConnectivityComparison:
         plt.close(fig)
 
     def test_subplot_count_matches_hops(self):
-        nhop_avgs = {2: [1.0, 2.0], 3: [0.5, 1.0]}
+        nhop_counts = {2: [1, 2], 3: [0, 1]}
+        sc_ratios = {2: [0.2, 0.4], 3: [0.0, 0.3]}
         fig = plot_nhop_connectivity_comparison(
-            sc_ratios=[0.2, 0.4],
-            nhop_avgs=nhop_avgs,
+            nhop_counts=nhop_counts,
+            sc_ratios=sc_ratios,
             title="Test",
             save_path=None,
         )
-        assert len(fig.axes) == len(nhop_avgs)
+        assert len(fig.axes) == len(nhop_counts)
         plt.close(fig)
 
     def test_saves_to_file(self, tmp_path):
         out = tmp_path / "nhop.png"
         fig = plot_nhop_connectivity_comparison(
-            sc_ratios=[0.25, 0.5],
-            nhop_avgs={2: [1.0, 2.0], 3: [0.5, 1.0]},
+            nhop_counts={2: [1, 2], 3: [0, 1]},
+            sc_ratios={2: [0.25, 0.5], 3: [0.0, 0.1]},
             title="Test",
             save_path=str(out),
         )
@@ -88,8 +89,8 @@ class TestPlotNhopConnectivityComparison:
 
     def test_single_hop(self):
         fig = plot_nhop_connectivity_comparison(
-            sc_ratios=[0.0, 0.5, 1.0],
-            nhop_avgs={2: [0.0, 1.5, 3.0]},
+            nhop_counts={2: [0, 1, 2]},
+            sc_ratios={2: [0.0, 0.5, 1.0]},
             title="Single hop",
             save_path=None,
         )
@@ -98,21 +99,21 @@ class TestPlotNhopConnectivityComparison:
 
     def test_axis_labels(self):
         fig = plot_nhop_connectivity_comparison(
-            sc_ratios=[0.3, 0.6],
-            nhop_avgs={2: [1.0, 2.0]},
+            nhop_counts={2: [1, 2]},
+            sc_ratios={2: [0.3, 0.6]},
             title="Labels test",
             save_path=None,
         )
         ax = fig.axes[0]
-        assert "SC ratio" in ax.get_xlabel()
-        assert "2-hop" in ax.get_ylabel()
+        assert "2-hop" in ax.get_xlabel()
+        assert "SC ratio" in ax.get_ylabel()
         plt.close(fig)
 
     def test_empty_data(self):
         """Should not raise even with empty sequences."""
         fig = plot_nhop_connectivity_comparison(
-            sc_ratios=[],
-            nhop_avgs={2: [], 3: []},
+            nhop_counts={2: [], 3: []},
+            sc_ratios={2: [], 3: []},
             title="Empty",
             save_path=None,
         )
