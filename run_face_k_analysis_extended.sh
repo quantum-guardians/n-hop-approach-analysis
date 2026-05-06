@@ -10,24 +10,24 @@ cd "$ROOT_DIR"
 #
 # Optional environment overrides:
 #   SEED=42
-#   NUM_GRAPHS=30
+#   NUM_GRAPHS=20
 #   NUM_SAMPLES=1
 #   PYTHON_BIN=python
 #   MPLCONFIGDIR=/custom/writable/path
 #
 # Notes:
-# - This script is intentionally larger than the current pilot sweep.
-# - It includes 40% and 50% edge-removal ratios as requested.
+# - This script is intentionally sized for a long-running broad sweep.
+# - It covers larger n, coarser removal ratios, and a wider target_k spectrum.
 # - NUM_SAMPLES is still passed through for CLI compatibility.
 
 PYTHON_BIN="${PYTHON_BIN:-python}"
 SEED="${SEED:-42}"
-NUM_GRAPHS="${NUM_GRAPHS:-30}"
+NUM_GRAPHS="${NUM_GRAPHS:-20}"
 NUM_SAMPLES="${NUM_SAMPLES:-1}"
 OUTPUT_DIR="${1:-results/face_k_analysis_extended}"
 
 SIZES=(
-  20 30 40 50 60 80 100
+  20 40 60 80 100 150 200 300 400
 )
 
 REMOVAL_PCTS=(
@@ -37,6 +37,9 @@ REMOVAL_PCTS=(
 TARGET_KS=(
   1 2 3 4 5 6 7 8 9 10
   11 12 13 14 15 16 17 18 19 20
+  21 22 23 24 25 26 27 28 29 30
+  31 32 33 34 35 36 37 38 39 40
+  41 42 43 44 45 46 47 48 49 50
 )
 
 echo "Starting extended face-k sweep"
