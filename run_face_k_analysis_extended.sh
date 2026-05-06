@@ -13,6 +13,7 @@ cd "$ROOT_DIR"
 #   NUM_GRAPHS=30
 #   NUM_SAMPLES=1
 #   PYTHON_BIN=python
+#   MPLCONFIGDIR=/custom/writable/path
 #
 # Notes:
 # - This script is intentionally larger than the current pilot sweep.
@@ -48,8 +49,10 @@ echo "  removal pcts : ${REMOVAL_PCTS[*]}"
 echo "  target ks    : ${TARGET_KS[*]}"
 
 mkdir -p "$OUTPUT_DIR"
+DEFAULT_MPLCONFIGDIR="$ROOT_DIR/.cache/matplotlib"
+mkdir -p "$DEFAULT_MPLCONFIGDIR"
 
-MPLCONFIGDIR="${MPLCONFIGDIR:-/private/tmp/mpl}" \
+MPLCONFIGDIR="${MPLCONFIGDIR:-$DEFAULT_MPLCONFIGDIR}" \
 "$PYTHON_BIN" main.py face-k-analysis \
   --sizes "${SIZES[@]}" \
   --removal-pcts "${REMOVAL_PCTS[@]}" \

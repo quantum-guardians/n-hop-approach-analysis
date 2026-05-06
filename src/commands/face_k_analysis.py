@@ -143,6 +143,39 @@ def _nx_to_mr2s_graph(nx_graph: nx.Graph) -> MR2SGraph:
     return MR2SGraph(edges)
 
 
+def _trial_cache_key(
+    *,
+    n: int,
+    pct: float,
+    k: int,
+    trial: int,
+    seed: int | None,
+) -> str:
+    """Build a stable JSON cache key for one face-k evaluation trial."""
+    return f"n={n}|pct={pct:.6f}|k={k}|trial={trial}|seed={seed}"
+
+
+def _load_trial_cache(cache_path: str) -> dict[str, Any]:
+    """Load the face-k trial cache from disk, returning an empty structure on first run."""
+    if not os.path.exists(cache_path):
+        return {"version": 1, "entries": {}}
+
+    with open(cache_path, "r", encoding="utf-8") as fh:
+        payload = json.load(fh)
+
+    if not isinstance(payload, dict):
+        return {"version": 1, "entries": {}}
+    if "entries" not in payload or not isinstance(payload["entries"], dict):
+        return {"version": 1, "entries": {}}
+    return payload
+
+
+def _save_trial_cache(cache_path: str, cache: dict[str, Any]) -> None:
+    """Persist the face-k trial cache to disk as JSON."""
+    with open(cache_path, "w", encoding="utf-8") as fh:
+        json.dump(cache, fh, indent=2)
+
+
 # ---------------------------------------------------------------------------
 # Core analysis
 # ---------------------------------------------------------------------------
@@ -234,6 +267,10 @@ def run(
         plot_output: Optional override for the plot file path.
     """
     os.makedirs(output_dir, exist_ok=True)
+    cache_path = os.path.join(output_dir, "face_k_trial_cache.json")
+    trial_cache = _load_trial_cache(cache_path)
+    cache_entries: dict[str, Any] = trial_cache["entries"]
+    dirty_cache = False
 
     # results[n][pct][k] = {"sc_ratio": float, "mean_apsp": float}
     results: dict[str, Any] = {}
@@ -256,8 +293,21 @@ def run(
 
                 sc_ratios: list[float] = []
                 apsps: list[float] = []
+                cache_hits = 0
 
                 for trial in range(num_graphs):
+                    cache_key = _trial_cache_key(
+                        n=n, pct=pct, k=k, trial=trial, seed=seed
+                    )
+                    cached_entry = cache_entries.get(cache_key)
+                    if isinstance(cached_entry, dict):
+                        cache_hits += 1
+                        if not cached_entry.get("skipped", False):
+                            sc_ratios.append(float(cached_entry["sc_ratio"]))
+                            if not bool(cached_entry.get("mean_apsp_is_nan", False)):
+                                apsps.append(float(cached_entry["mean_apsp"]))
+                        continue
+
                     graph_seed = (seed + trial * 997 + n * 31 + int(pct * 100) * 7) if seed is not None else None
                     graph_rng = np.random.default_rng(graph_seed)
 
@@ -265,6 +315,8 @@ def run(
 
                     # Skip if not biconnected (e.g., very small graphs)
                     if not nx.is_biconnected(base_graph):
+                        cache_entries[cache_key] = {"skipped": True, "reason": "base_graph_not_biconnected"}
+                        dirty_cache = True
                         continue
 
                     reduced_graph, _ = remove_edges_maintaining_biconnectivity(
@@ -272,6 +324,8 @@ def run(
                     )
 
                     if not nx.is_biconnected(reduced_graph):
+                        cache_entries[cache_key] = {"skipped": True, "reason": "reduced_graph_not_biconnected"}
+                        dirty_cache = True
                         continue
 
                     sc_r, mean_a = _evaluate_face_cycle(
@@ -280,6 +334,17 @@ def run(
                     sc_ratios.append(sc_r)
                     if not np.isnan(mean_a):
                         apsps.append(mean_a)
+                    cache_entries[cache_key] = {
+                        "skipped": False,
+                        "sc_ratio": float(sc_r),
+                        "mean_apsp": None if np.isnan(mean_a) else float(mean_a),
+                        "mean_apsp_is_nan": bool(np.isnan(mean_a)),
+                    }
+                    dirty_cache = True
+
+                if dirty_cache:
+                    _save_trial_cache(cache_path, trial_cache)
+                    dirty_cache = False
 
                 agg_sc = float(np.mean(sc_ratios)) if sc_ratios else float("nan")
                 agg_apsp = float(np.mean(apsps)) if apsps else float("nan")
@@ -288,7 +353,10 @@ def run(
                     "sc_ratio": agg_sc,
                     "mean_apsp": agg_apsp,
                 }
-                print(f"SC={agg_sc:.3f}, APSP={agg_apsp:.3f}")
+                print(
+                    f"SC={agg_sc:.3f}, APSP={agg_apsp:.3f} "
+                    f"(cache hits: {cache_hits}/{num_graphs})"
+                )
 
     optimal = derive_optimal_k(results, graph_sizes, removal_pcts, target_ks)
     a, b, c = _fit_optimal_k_formula(optimal, graph_sizes, removal_pcts)

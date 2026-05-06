@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import json
 
 import networkx as nx
 import numpy as np
@@ -17,6 +18,9 @@ from src.commands.face_k_analysis import (
     _fit_optimal_k_formula,
     predict_optimal_k,
     evaluate_optimal_k_formula,
+    _trial_cache_key,
+    _load_trial_cache,
+    _save_trial_cache,
     remove_edges_maintaining_biconnectivity,
 )
 from src.visualizer import plot_face_k_analysis, plot_optimal_k_fit_evidence
@@ -241,6 +245,24 @@ class TestEvaluateOptimalKFormula:
         assert len(evidence["rows"]) == 4
 
 
+class TestTrialCacheHelpers:
+    def test_trial_cache_key_is_stable(self) -> None:
+        key = _trial_cache_key(n=20, pct=0.4, k=7, trial=3, seed=42)
+        assert key == "n=20|pct=0.400000|k=7|trial=3|seed=42"
+
+    def test_load_missing_cache_returns_empty_payload(self, tmp_path) -> None:
+        payload = _load_trial_cache(str(tmp_path / "missing.json"))
+        assert payload["version"] == 1
+        assert payload["entries"] == {}
+
+    def test_save_then_load_round_trip(self, tmp_path) -> None:
+        cache_path = tmp_path / "trial_cache.json"
+        payload = {"version": 1, "entries": {"demo": {"skipped": False, "sc_ratio": 1.0}}}
+        _save_trial_cache(str(cache_path), payload)
+        loaded = _load_trial_cache(str(cache_path))
+        assert loaded == payload
+
+
 # ---------------------------------------------------------------------------
 # plot_face_k_analysis
 # ---------------------------------------------------------------------------
@@ -358,11 +380,43 @@ class TestRun:
 
         evidence_path = tmp_path / "optimal_k_evidence.json"
         assert evidence_path.exists()
+        cache_path = tmp_path / "face_k_trial_cache.json"
+        assert cache_path.exists()
 
         report_path = tmp_path / "report.md"
         assert report_path.exists()
         report_text = report_path.read_text(encoding="utf-8")
         assert "target k" in report_text or "target_k" in report_text or "k*" in report_text
+
+    def test_run_reuses_trial_cache(self, tmp_path, monkeypatch) -> None:
+        monkeypatch.setattr(fka, "plot_face_k_analysis", lambda **kw: None)
+        monkeypatch.setattr(fka, "plot_optimal_k_fit_evidence", lambda **kw: None)
+
+        call_count = 0
+
+        def fake_eval(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return 1.0, 2.0
+
+        monkeypatch.setattr(fka, "_evaluate_face_cycle", fake_eval)
+
+        kwargs = dict(
+            graph_sizes=[8],
+            removal_pcts=[0.0],
+            target_ks=[1, 2],
+            num_graphs=2,
+            num_samples=10,
+            seed=0,
+            output_dir=str(tmp_path),
+            plot_output=str(tmp_path / "out.png"),
+        )
+        fka.run(**kwargs)
+        assert call_count == 4
+
+        call_count = 0
+        fka.run(**kwargs)
+        assert call_count == 0
 
     def test_run_cli_dispatch(self, tmp_path) -> None:
         """Smoke test for the CLI dispatch path."""
