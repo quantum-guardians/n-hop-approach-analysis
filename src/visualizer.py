@@ -8,8 +8,9 @@ strongly-connected orientation ratios across multiple graphs.
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Sequence
 
+import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 
@@ -105,6 +106,120 @@ def plot_nhop_connectivity_comparison(
         ax.set_xlabel(f"{hop}-hop neighbour count")
         ax.set_ylabel("SC ratio (strongly-connected / total)")
         ax.set_title(f"{hop}-hop count vs SC ratio")
+
+    fig.tight_layout()
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150)
+    else:
+        plt.show()
+
+    return fig
+
+
+def plot_face_k_analysis(
+    results: dict[str, Any],
+    graph_sizes: list[int],
+    removal_pcts: list[float],
+    target_ks: list[int],
+    title: str = "Face-k Analysis",
+    save_path: str | None = None,
+) -> plt.Figure:
+    """Draw trend plots for the face-k analysis.
+
+    Creates a 2x2 panel figure:
+
+    * **Top-left**: SC ratio vs ``target_k`` for each graph size
+      (at ``removal_pct = 0``).
+    * **Top-right**: SC ratio vs ``target_k`` for each removal percentage
+      (at the median graph size).
+    * **Bottom-left**: Mean normalised APSP vs ``target_k`` for each graph size
+      (at ``removal_pct = 0``).
+    * **Bottom-right**: Mean normalised APSP vs ``target_k`` for each removal
+      percentage (at the median graph size).
+
+    Args:
+        results: Nested dict ``results[n_str][pct_str][k_str]`` as produced by
+            :func:`src.commands.face_k_analysis.run`.
+        graph_sizes: List of vertex counts swept in the experiment.
+        removal_pcts: List of edge-removal fractions swept.
+        target_ks: List of ``target_k`` values swept.
+        title: Super-title for the figure.
+        save_path: File path to save the figure; displayed interactively when
+            ``None``.
+
+    Returns:
+        The :class:`matplotlib.figure.Figure` that was created.
+    """
+    ref_pct = removal_pcts[0]
+    ref_n = graph_sizes[len(graph_sizes) // 2]
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(title, fontsize=14)
+
+    k_arr = np.array(target_ks, dtype=float)
+
+    # Top-left: SC ratio vs k, varying graph size (fixed removal_pct)
+    ax = axes[0, 0]
+    for n in graph_sizes:
+        sc_vals = [
+            results.get(str(n), {}).get(str(ref_pct), {}).get(str(k), {}).get(
+                "sc_ratio", float("nan")
+            )
+            for k in target_ks
+        ]
+        ax.plot(k_arr, sc_vals, marker="o", label=f"n={n}")
+    ax.set_xlabel("target k")
+    ax.set_ylabel("SC ratio")
+    ax.set_title(f"SC ratio vs k  (removal={ref_pct:.0%})")
+    ax.legend(fontsize=8)
+    ax.set_ylim(0, 1.05)
+
+    # Top-right: SC ratio vs k, varying removal_pct (fixed graph size)
+    ax = axes[0, 1]
+    for pct in removal_pcts:
+        sc_vals = [
+            results.get(str(ref_n), {}).get(str(pct), {}).get(str(k), {}).get(
+                "sc_ratio", float("nan")
+            )
+            for k in target_ks
+        ]
+        ax.plot(k_arr, sc_vals, marker="s", label=f"removal={pct:.0%}")
+    ax.set_xlabel("target k")
+    ax.set_ylabel("SC ratio")
+    ax.set_title(f"SC ratio vs k  (n={ref_n})")
+    ax.legend(fontsize=8)
+    ax.set_ylim(0, 1.05)
+
+    # Bottom-left: mean APSP vs k, varying graph size (fixed removal_pct)
+    ax = axes[1, 0]
+    for n in graph_sizes:
+        apsp_vals = [
+            results.get(str(n), {}).get(str(ref_pct), {}).get(str(k), {}).get(
+                "mean_apsp", float("nan")
+            )
+            for k in target_ks
+        ]
+        ax.plot(k_arr, apsp_vals, marker="o", label=f"n={n}")
+    ax.set_xlabel("target k")
+    ax.set_ylabel("mean normalised APSP")
+    ax.set_title(f"APSP vs k  (removal={ref_pct:.0%})")
+    ax.legend(fontsize=8)
+
+    # Bottom-right: mean APSP vs k, varying removal_pct (fixed graph size)
+    ax = axes[1, 1]
+    for pct in removal_pcts:
+        apsp_vals = [
+            results.get(str(ref_n), {}).get(str(pct), {}).get(str(k), {}).get(
+                "mean_apsp", float("nan")
+            )
+            for k in target_ks
+        ]
+        ax.plot(k_arr, apsp_vals, marker="s", label=f"removal={pct:.0%}")
+    ax.set_xlabel("target k")
+    ax.set_ylabel("mean normalised APSP")
+    ax.set_title(f"APSP vs k  (n={ref_n})")
+    ax.legend(fontsize=8)
 
     fig.tight_layout()
 
