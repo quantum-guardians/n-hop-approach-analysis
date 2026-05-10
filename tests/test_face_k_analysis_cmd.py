@@ -425,3 +425,147 @@ class TestRun:
         subparsers_action = argparse.ArgumentParser().add_subparsers()
         fka.register_parser(subparsers_action)
         # Just ensure register_parser doesn't raise
+
+
+# ---------------------------------------------------------------------------
+# Multi-threading and cache thread-safety
+# ---------------------------------------------------------------------------
+
+class TestMultiThreading:
+    """Verify that run() works correctly with multiple worker threads."""
+
+    def _patch_plots(self, monkeypatch) -> None:
+        monkeypatch.setattr(fka, "plot_face_k_analysis", lambda **kw: None)
+        monkeypatch.setattr(fka, "plot_optimal_k_fit_evidence", lambda **kw: None)
+
+    def test_run_with_explicit_num_workers(self, tmp_path, monkeypatch) -> None:
+        """run() accepts and respects an explicit num_workers argument."""
+        self._patch_plots(monkeypatch)
+        fka.run(
+            graph_sizes=[8],
+            removal_pcts=[0.0],
+            target_ks=[1, 2],
+            num_graphs=2,
+            num_samples=10,
+            seed=1,
+            output_dir=str(tmp_path),
+            plot_output=str(tmp_path / "out.png"),
+            num_workers=2,
+        )
+        import json
+        data = json.loads((tmp_path / "face_k_results.json").read_text())
+        assert "8" in data["results"]
+
+    def test_run_parallel_matches_sequential_results(self, tmp_path, monkeypatch) -> None:
+        """Results should be the same regardless of the number of workers."""
+        import json
+
+        self._patch_plots(monkeypatch)
+
+        call_log: list[tuple] = []
+
+        def deterministic_eval(graph, target_k, num_samples, rng):
+            val = float(target_k) / 10.0
+            call_log.append((target_k,))
+            return val, val * 2
+
+        monkeypatch.setattr(fka, "_evaluate_face_cycle", deterministic_eval)
+
+        common_kwargs = dict(
+            graph_sizes=[8, 10],
+            removal_pcts=[0.0, 0.1],
+            target_ks=[1, 2, 3],
+            num_graphs=2,
+            num_samples=5,
+            seed=7,
+            plot_output=None,
+        )
+
+        out1 = tmp_path / "run1"
+        fka.run(output_dir=str(out1), num_workers=1, **common_kwargs)
+        data1 = json.loads((out1 / "face_k_results.json").read_text())
+
+        call_log.clear()
+        out2 = tmp_path / "run2"
+        fka.run(output_dir=str(out2), num_workers=4, **common_kwargs)
+        data2 = json.loads((out2 / "face_k_results.json").read_text())
+
+        assert data1["results"] == data2["results"]
+
+    def test_cache_written_atomically(self, tmp_path, monkeypatch) -> None:
+        """Cache saves should never leave a partially-written JSON file."""
+        import json
+
+        self._patch_plots(monkeypatch)
+
+        # Track every file-write by wrapping _save_trial_cache.
+        observed_valid: list[bool] = []
+        original_save = fka._save_trial_cache
+
+        def checked_save(path, cache):
+            original_save(path, cache)
+            # Immediately after save, file must be valid JSON.
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    json.load(fh)
+                observed_valid.append(True)
+            except json.JSONDecodeError:
+                observed_valid.append(False)
+
+        monkeypatch.setattr(fka, "_save_trial_cache", checked_save)
+        monkeypatch.setattr(
+            fka,
+            "_evaluate_face_cycle",
+            lambda g, k, ns, rng: (0.5, 1.0),
+        )
+
+        fka.run(
+            graph_sizes=[8, 10],
+            removal_pcts=[0.0, 0.1],
+            target_ks=[1, 2],
+            num_graphs=3,
+            num_samples=5,
+            seed=0,
+            output_dir=str(tmp_path),
+            plot_output=None,
+            num_workers=4,
+        )
+
+        assert len(observed_valid) > 0
+        assert all(observed_valid), "A cache save produced invalid JSON"
+
+    def test_run_with_multiple_workers_produces_complete_results(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        """All (n, pct, k) results must be present even with many threads."""
+        import json
+
+        self._patch_plots(monkeypatch)
+        monkeypatch.setattr(
+            fka,
+            "_evaluate_face_cycle",
+            lambda g, k, ns, rng: (0.7, 2.0),
+        )
+
+        sizes = [8, 10, 12]
+        pcts = [0.0, 0.1, 0.2]
+        ks = [1, 2, 3, 4]
+
+        fka.run(
+            graph_sizes=sizes,
+            removal_pcts=pcts,
+            target_ks=ks,
+            num_graphs=2,
+            num_samples=5,
+            seed=0,
+            output_dir=str(tmp_path),
+            plot_output=None,
+            num_workers=4,
+        )
+
+        data = json.loads((tmp_path / "face_k_results.json").read_text())
+        for n in sizes:
+            for pct in pcts:
+                for k in ks:
+                    entry = data["results"][str(n)][str(pct)][str(k)]
+                    assert "sc_ratio" in entry, f"Missing entry for n={n} pct={pct} k={k}"

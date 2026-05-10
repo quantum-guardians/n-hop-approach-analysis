@@ -25,6 +25,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tempfile
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import matplotlib
@@ -171,14 +174,156 @@ def _load_trial_cache(cache_path: str) -> dict[str, Any]:
 
 
 def _save_trial_cache(cache_path: str, cache: dict[str, Any]) -> None:
-    """Persist the face-k trial cache to disk as JSON."""
-    with open(cache_path, "w", encoding="utf-8") as fh:
-        json.dump(cache, fh, indent=2)
+    """Persist the face-k trial cache to disk atomically.
+
+    Writes to a sibling temporary file first, then atomically replaces the
+    target file so that a concurrent read or an interrupted write can never
+    observe a partially-written cache.  The caller is responsible for holding
+    any necessary lock before invoking this function.
+    """
+    dir_name = os.path.dirname(os.path.abspath(cache_path))
+    fd, tmp_path = tempfile.mkstemp(dir=dir_name, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(cache, fh, indent=2)
+        os.replace(tmp_path, cache_path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 # ---------------------------------------------------------------------------
 # Core analysis
 # ---------------------------------------------------------------------------
+
+def _process_combo(
+    *,
+    n: int,
+    pct: float,
+    k: int,
+    num_graphs: int,
+    num_samples: int,
+    seed: int | None,
+    cache_entries: dict[str, Any],
+    cache_path: str,
+    trial_cache: dict[str, Any],
+    cache_lock: threading.Lock,
+    print_lock: threading.Lock,
+    progress_counter: list[int],
+    total_combos: int,
+) -> tuple[str, str, str, dict[str, float]]:
+    """Process all trials for one ``(n, pct, k)`` combination.
+
+    Reads trial results from the shared *cache_entries* when available, or
+    computes them via :func:`_evaluate_face_cycle`.  All reads and writes to
+    *cache_entries* and the backing JSON file are serialised through
+    *cache_lock*.  The cache file is written atomically so that an interrupted
+    run leaves the file in a valid state.
+
+    Args:
+        n: Number of graph vertices.
+        pct: Edge-removal fraction (0.0–1.0).
+        k: FaceCycle ``target_k`` value.
+        num_graphs: Number of independent graph trials.
+        num_samples: Number of orientation samples passed to
+            :func:`_evaluate_face_cycle` for each trial.
+        seed: Base random seed; ``None`` for non-reproducible runs.
+        cache_entries: Shared in-memory cache dict (mutated under *cache_lock*).
+        cache_path: Path to the JSON cache file on disk.
+        trial_cache: Full cache payload (contains ``"entries"`` and metadata).
+        cache_lock: Mutex that guards *cache_entries* and all file writes.
+        print_lock: Mutex that serialises ``print`` calls across threads.
+        progress_counter: Single-element list holding the number of combos
+            completed so far (incremented under *print_lock*).
+        total_combos: Total number of ``(n, pct, k)`` combos in the sweep.
+
+    Returns:
+        ``(n_str, pct_str, k_str, {"sc_ratio": float, "mean_apsp": float})``
+    """
+    sc_ratios: list[float] = []
+    apsps: list[float] = []
+    cache_hits = 0
+
+    for trial in range(num_graphs):
+        cache_key = _trial_cache_key(n=n, pct=pct, k=k, trial=trial, seed=seed)
+
+        # --- cache look-up (under lock) ---
+        with cache_lock:
+            cached_entry = cache_entries.get(cache_key)
+
+        if isinstance(cached_entry, dict):
+            cache_hits += 1
+            if not cached_entry.get("skipped", False):
+                sc_ratios.append(float(cached_entry["sc_ratio"]))
+                if not bool(cached_entry.get("mean_apsp_is_nan", False)):
+                    apsps.append(float(cached_entry["mean_apsp"]))
+            continue
+
+        # --- compute ---
+        graph_seed = (
+            seed + trial * 997 + n * 31 + int(pct * 100) * 7
+            if seed is not None
+            else None
+        )
+        graph_rng = np.random.default_rng(graph_seed)
+        base_graph = _generate_delaunay_graph(n, graph_seed)
+
+        if not nx.is_biconnected(base_graph):
+            new_entry: dict[str, Any] = {
+                "skipped": True,
+                "reason": "base_graph_not_biconnected",
+            }
+            with cache_lock:
+                cache_entries[cache_key] = new_entry
+                _save_trial_cache(cache_path, trial_cache)
+            continue
+
+        reduced_graph, _ = remove_edges_maintaining_biconnectivity(
+            base_graph, pct, graph_rng
+        )
+
+        if not nx.is_biconnected(reduced_graph):
+            new_entry = {
+                "skipped": True,
+                "reason": "reduced_graph_not_biconnected",
+            }
+            with cache_lock:
+                cache_entries[cache_key] = new_entry
+                _save_trial_cache(cache_path, trial_cache)
+            continue
+
+        sc_r, mean_a = _evaluate_face_cycle(reduced_graph, k, num_samples, graph_rng)
+        sc_ratios.append(sc_r)
+        if not np.isnan(mean_a):
+            apsps.append(mean_a)
+
+        new_entry = {
+            "skipped": False,
+            "sc_ratio": float(sc_r),
+            "mean_apsp": None if np.isnan(mean_a) else float(mean_a),
+            "mean_apsp_is_nan": bool(np.isnan(mean_a)),
+        }
+        with cache_lock:
+            cache_entries[cache_key] = new_entry
+            _save_trial_cache(cache_path, trial_cache)
+
+    agg_sc = float(np.mean(sc_ratios)) if sc_ratios else float("nan")
+    agg_apsp = float(np.mean(apsps)) if apsps else float("nan")
+
+    with print_lock:
+        progress_counter[0] += 1
+        idx = progress_counter[0]
+        print(
+            f"[{idx}/{total_combos}] "
+            f"n={n}, removal={pct:.0%}, k={k}  "
+            f"SC={agg_sc:.3f}, APSP={agg_apsp:.3f} "
+            f"(cache hits: {cache_hits}/{num_graphs})"
+        )
+
+    return str(n), str(pct), str(k), {"sc_ratio": agg_sc, "mean_apsp": agg_apsp}
 
 def _evaluate_face_cycle(
     reduced_graph: nx.Graph,
@@ -243,18 +388,20 @@ def run(
     seed: int | None,
     output_dir: str,
     plot_output: str | None,
+    num_workers: int | None = None,
 ) -> None:
-    """Run the face-k analysis and save results.
+    """Run the face-k analysis in parallel and save results.
 
-    For every combination of *graph_sizes* × *removal_pcts* × *target_ks*:
+    Sweeps every combination of *graph_sizes* × *removal_pcts* × *target_ks*
+    using a :class:`~concurrent.futures.ThreadPoolExecutor`.  The optimal
+    number of worker threads is chosen automatically as
+    ``min(total_combos, os.cpu_count())`` unless overridden via *num_workers*.
 
-    * Generates *num_graphs* Delaunay planar graphs.
-    * Removes edges while maintaining biconnectivity.
-    * Applies ``FaceCycle(target_k)`` and samples *num_samples* random
-      orientations to compute SC ratio and mean APSP.
-
-    Saves a JSON results file and a multi-panel trend figure to *output_dir*,
-    then writes a brief report with the empirically derived optimal-k formula.
+    Each thread processes all *num_graphs* trials for one ``(n, pct, k)``
+    combination.  A :class:`threading.Lock` serialises every access to the
+    shared in-memory cache and the backing JSON file; the file is always
+    written atomically (write-to-temp then rename) so the cache is never
+    corrupted even if the process is interrupted mid-run.
 
     Args:
         graph_sizes: List of vertex counts to sweep.
@@ -265,98 +412,65 @@ def run(
         seed: Base random seed for reproducibility.
         output_dir: Directory where results, plot, and report are saved.
         plot_output: Optional override for the plot file path.
+        num_workers: Number of worker threads.  ``None`` means auto-select
+            as ``min(total_combos, os.cpu_count() or 1)``.
     """
     os.makedirs(output_dir, exist_ok=True)
     cache_path = os.path.join(output_dir, "face_k_trial_cache.json")
     trial_cache = _load_trial_cache(cache_path)
     cache_entries: dict[str, Any] = trial_cache["entries"]
-    dirty_cache = False
 
-    # results[n][pct][k] = {"sc_ratio": float, "mean_apsp": float}
-    results: dict[str, Any] = {}
+    # Shared synchronisation primitives
+    cache_lock = threading.Lock()
+    print_lock = threading.Lock()
+    progress_counter: list[int] = [0]  # mutable container for shared counter
 
-    total_combos = len(graph_sizes) * len(removal_pcts) * len(target_ks)
-    combo_idx = 0
+    # Build all (n, pct, k) combo tasks
+    combos = [
+        (n, pct, k)
+        for n in graph_sizes
+        for pct in removal_pcts
+        for k in target_ks
+    ]
+    total_combos = len(combos)
 
+    # Determine optimal worker count automatically
+    effective_workers = num_workers or min(total_combos, os.cpu_count() or 1)
+    print(
+        f"Starting face-k analysis: {total_combos} combos, "
+        f"{effective_workers} worker thread(s)."
+    )
+
+    # results[n_str][pct_str][k_str] = {"sc_ratio": float, "mean_apsp": float}
+    results: dict[str, Any] = {str(n): {} for n in graph_sizes}
     for n in graph_sizes:
-        results[str(n)] = {}
         for pct in removal_pcts:
             results[str(n)][str(pct)] = {}
-            for k in target_ks:
-                combo_idx += 1
-                print(
-                    f"[{combo_idx}/{total_combos}] "
-                    f"n={n}, removal={pct:.0%}, k={k} …",
-                    end="  ",
-                    flush=True,
-                )
 
-                sc_ratios: list[float] = []
-                apsps: list[float] = []
-                cache_hits = 0
+    with ThreadPoolExecutor(max_workers=effective_workers) as executor:
+        future_to_combo = {
+            executor.submit(
+                _process_combo,
+                n=n,
+                pct=pct,
+                k=k,
+                num_graphs=num_graphs,
+                num_samples=num_samples,
+                seed=seed,
+                cache_entries=cache_entries,
+                cache_path=cache_path,
+                trial_cache=trial_cache,
+                cache_lock=cache_lock,
+                print_lock=print_lock,
+                progress_counter=progress_counter,
+                total_combos=total_combos,
+            ): (n, pct, k)
+            for n, pct, k in combos
+        }
 
-                for trial in range(num_graphs):
-                    cache_key = _trial_cache_key(
-                        n=n, pct=pct, k=k, trial=trial, seed=seed
-                    )
-                    cached_entry = cache_entries.get(cache_key)
-                    if isinstance(cached_entry, dict):
-                        cache_hits += 1
-                        if not cached_entry.get("skipped", False):
-                            sc_ratios.append(float(cached_entry["sc_ratio"]))
-                            if not bool(cached_entry.get("mean_apsp_is_nan", False)):
-                                apsps.append(float(cached_entry["mean_apsp"]))
-                        continue
-
-                    graph_seed = (seed + trial * 997 + n * 31 + int(pct * 100) * 7) if seed is not None else None
-                    graph_rng = np.random.default_rng(graph_seed)
-
-                    base_graph = _generate_delaunay_graph(n, graph_seed)
-
-                    # Skip if not biconnected (e.g., very small graphs)
-                    if not nx.is_biconnected(base_graph):
-                        cache_entries[cache_key] = {"skipped": True, "reason": "base_graph_not_biconnected"}
-                        dirty_cache = True
-                        continue
-
-                    reduced_graph, _ = remove_edges_maintaining_biconnectivity(
-                        base_graph, pct, graph_rng
-                    )
-
-                    if not nx.is_biconnected(reduced_graph):
-                        cache_entries[cache_key] = {"skipped": True, "reason": "reduced_graph_not_biconnected"}
-                        dirty_cache = True
-                        continue
-
-                    sc_r, mean_a = _evaluate_face_cycle(
-                        reduced_graph, k, num_samples, graph_rng
-                    )
-                    sc_ratios.append(sc_r)
-                    if not np.isnan(mean_a):
-                        apsps.append(mean_a)
-                    cache_entries[cache_key] = {
-                        "skipped": False,
-                        "sc_ratio": float(sc_r),
-                        "mean_apsp": None if np.isnan(mean_a) else float(mean_a),
-                        "mean_apsp_is_nan": bool(np.isnan(mean_a)),
-                    }
-                    dirty_cache = True
-
-                if dirty_cache:
-                    _save_trial_cache(cache_path, trial_cache)
-                    dirty_cache = False
-
-                agg_sc = float(np.mean(sc_ratios)) if sc_ratios else float("nan")
-                agg_apsp = float(np.mean(apsps)) if apsps else float("nan")
-
-                results[str(n)][str(pct)][str(k)] = {
-                    "sc_ratio": agg_sc,
-                    "mean_apsp": agg_apsp,
-                }
-                print(
-                    f"SC={agg_sc:.3f}, APSP={agg_apsp:.3f} "
-                    f"(cache hits: {cache_hits}/{num_graphs})"
-                )
+        for future in as_completed(future_to_combo):
+            n_str, pct_str, k_str, combo_result = future.result()
+            results[n_str][pct_str][k_str] = combo_result
 
     optimal = derive_optimal_k(results, graph_sizes, removal_pcts, target_ks)
     a, b, c = _fit_optimal_k_formula(optimal, graph_sizes, removal_pcts)
@@ -763,6 +877,15 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ig
         default=None,
         help="Override the plot file path (default: <output-dir>/face_k_analysis.png)",
     )
+    p.add_argument(
+        "--num-workers",
+        type=int,
+        default=None,
+        help=(
+            "Number of parallel worker threads. "
+            "Defaults to min(total_combos, cpu_count) when omitted."
+        ),
+    )
     p.set_defaults(func=_dispatch)
 
 
@@ -776,4 +899,5 @@ def _dispatch(args: argparse.Namespace) -> None:
         seed=args.seed,
         output_dir=args.output_dir,
         plot_output=args.output,
+        num_workers=args.num_workers,
     )
