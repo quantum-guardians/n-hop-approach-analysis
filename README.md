@@ -9,7 +9,8 @@ Analysing the n-hop approach on random directed graphs.
 | `src/graph_generator.py` | 정점 수와 연결성 확률로 무방향 랜덤 그래프 생성 |
 | `src/case_generator.py` | 전수 열거(`generate_strongly_connected_orientations`) 및 무작위 샘플링(`sample_strongly_connected_orientations`) 기반으로 강연결(strongly-connected) 방향 그래프 산출 |
 | `src/score_calculator.py` | NumPy 기반 APSP 합계 및 n-hop 이웃 수(n=2,3,4) 계산 |
-| `src/visualizer.py` | APSP 점수 간 상관관계 산점도 및 n-hop 수 / 연결성 비교 그래프 시각화 |
+| `src/visualizer.py` | APSP 점수 간 상관관계 산점도, n-hop 수 / 연결성 비교 그래프, face-k 분석 시각화 |
+| `src/commands/face_k_analysis.py` | `mr2s-module`의 `FaceCycle`을 활용한 최적 face-cycle target k 분석 |
 
 ## 설치 (Installation)
 
@@ -84,6 +85,49 @@ python main.py nhop-connectivity --vertices 5 --num-graphs 30 --num-orientations
 | `--seed` | None | 기본 랜덤 시드. 그래프 i는 seed+i 사용 |
 | `--output` | `nhop_connectivity_v{N}.png` | 저장할 이미지 경로 |
 
+---
+
+### `face-k-analysis` – 최적 FaceCycle target k 분석
+
+달로네 평면 그래프에서 쌍연결성(biconnectivity)을 유지하면서 간선을 제거한 뒤
+`mr2s-module`의 `FaceCycle(target_k)`를 적용합니다.  세 가지 변수:
+**그래프 크기**, **간선 제거 비율**, **face cluster 수(target k)**에 대해
+강연결 비율(SC ratio)과 정규화 APSP 평균을 계산하고 추이 그래프를 생성합니다.
+결과 데이터는 JSON으로 저장되며 최적 k 공식을 담은 Markdown 보고서도 함께 생성됩니다.
+
+```bash
+# 기본 실행 (정점 10/20/30, 제거 비율 0~30%, k=1..10)
+python main.py face-k-analysis
+
+# 파라미터 지정
+python main.py face-k-analysis \
+    --sizes 10 20 30 \
+    --removal-pcts 0.0 0.1 0.2 0.3 \
+    --target-ks 1 2 3 4 5 6 7 8 9 10 \
+    --num-graphs 10 \
+    --num-samples 200 \
+    --seed 42 \
+    --output-dir results/face_k_analysis
+```
+
+#### `face-k-analysis` CLI 옵션
+
+| 옵션 | 기본값 | 설명 |
+|---|---|---|
+| `--sizes` | 10 20 30 | 탐색할 그래프 정점 수 목록 |
+| `--removal-pcts` | 0.0 0.1 0.2 0.3 | 간선 제거 비율 목록 (각 0–1 범위) |
+| `--target-ks` | 1..10 | FaceCycle target_k 후보 목록 |
+| `--num-graphs` | 10 | 조합별 독립 그래프 생성 수 |
+| `--num-samples` | 200 | 그래프당 무작위 방향 샘플 수 |
+| `--seed` | None | 재현성을 위한 기본 랜덤 시드 |
+| `--output-dir` | `results/face_k_analysis` | 결과 JSON·플롯·보고서 저장 디렉토리 |
+| `--output` | `<output-dir>/face_k_analysis.png` | 플롯 파일 경로 재정의 |
+
+결과 파일:
+- `face_k_results.json` – 전체 수치 결과
+- `face_k_analysis.png` – SC 비율 / APSP 추이 2×2 그래프
+- `report.md` – 실험 요약 및 경험적 최적 k 공식 보고서
+
 ## 테스트 (Tests)
 
 ```bash
@@ -94,17 +138,28 @@ python -m pytest tests/ -v
 
 ```
 n-hop-approach-analysis/
-├── main.py               # 실행 진입점 (analyse / nhop-connectivity 서브 커맨드)
+├── main.py               # 실행 진입점 (analyse / nhop-connectivity / face-k-analysis 서브 커맨드)
 ├── requirements.txt
 ├── src/
 │   ├── graph_generator.py
 │   ├── case_generator.py
 │   ├── score_calculator.py
-│   └── visualizer.py
+│   ├── visualizer.py
+│   └── commands/
+│       ├── analyse.py
+│       ├── nhop_connectivity.py
+│       └── face_k_analysis.py
+├── results/
+│   └── face_k_analysis/
+│       ├── face_k_results.json
+│       ├── face_k_analysis.png
+│       └── report.md
 └── tests/
     ├── test_graph_generator.py
     ├── test_case_generator.py
     ├── test_score_calculator.py
-    └── test_visualizer.py
+    ├── test_visualizer.py
+    ├── test_nhop_connectivity_cmd.py
+    └── test_face_k_analysis_cmd.py
 ```
 

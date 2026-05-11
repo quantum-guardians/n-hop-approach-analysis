@@ -8,7 +8,11 @@ from .score_calculator import (
     calculate_apsp_sum_and_nhop_neighbor_counts,
     calculate_nhop_neighbor_counts,
 )
-from .visualizer import plot_score_correlations, plot_nhop_connectivity_comparison
+from .visualizer import (
+    plot_score_correlations,
+    plot_nhop_connectivity_comparison,
+    plot_face_k_analysis,
+)
 
 __all__ = [
     "generate_graph",
@@ -19,4 +23,5 @@ __all__ = [
     "calculate_nhop_neighbor_counts",
     "plot_score_correlations",
     "plot_nhop_connectivity_comparison",
+    "plot_face_k_analysis",
 ]
