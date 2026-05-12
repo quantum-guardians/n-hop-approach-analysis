@@ -54,7 +54,7 @@ def _build_solver(target_k: int) -> QuboMR2SSolver:
         FaceCycle(target_k=target_k),
         SAQuboSolver(ApspSumRanker()),
         Evaluator(),
-        {n_hop_poly, FlowPolyGenerator()},
+        [n_hop_poly, FlowPolyGenerator()],
     )
     return solver
 

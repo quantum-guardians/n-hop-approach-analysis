@@ -286,10 +286,6 @@ def plot_optimal_k_fit_evidence(
     lower = min(observed_vals.min(initial=0), predicted_vals.min(initial=0))
     upper = max(observed_vals.max(initial=1), predicted_vals.max(initial=1))
     ax.plot([lower, upper], [lower, upper], linestyle="--", color="black", linewidth=1)
-    ax.set_xlabel("Observed optimal k")
-    ax.set_ylabel("Predicted optimal k")
-    ax.set_title("Observed vs predicted")
-
     fig.tight_layout()
 
     if save_path is not None:
@@ -297,4 +293,118 @@ def plot_optimal_k_fit_evidence(
     else:
         plt.show()
 
+    return fig
+
+
+def plot_apsp_reduction(
+    sizes: list[int],
+    random_apsp: list[float],
+    raw_sa_apsp: list[float],
+    global_apsp: list[float],
+    clustered_apsp: list[float],
+    save_path: str | None = None,
+) -> plt.Figure:
+    """Plot APSP reduction comparing Random, Raw SA, Global (QUBO), and Clustered (DnC)."""
+    fig = plt.figure(figsize=(10, 6))
+    plt.plot(sizes, random_apsp, "o-", label="Random Orientation", color="gray", alpha=0.6)
+    plt.plot(sizes, raw_sa_apsp, "x--", label="Raw SA (SAMR2SSolver)", color="orange")
+    plt.plot(sizes, global_apsp, "s-", label="Global (QuboMR2SSolver)", color="blue")
+    plt.plot(sizes, clustered_apsp, "D-", label="Clustered (DnCMr2sSolver)", color="red", linewidth=2)
+    plt.xlabel("Graph Size (Number of Vertices)", fontsize=12)
+    plt.ylabel("Normalized APSP Sum", fontsize=12)
+    plt.title("APSP Reduction: Comparison of Solvers", fontsize=14)
+    plt.legend()
+    plt.grid(True, linestyle="--", alpha=0.7)
+
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+    return fig
+
+
+def plot_flow_stability(
+    sizes: list[int],
+    random_flow: list[float],
+    raw_sa_flow: list[float],
+    global_flow: list[float],
+    clustered_flow: list[float],
+    save_path: str | None = None,
+) -> plt.Figure:
+    """Plot Flow Stability comparing Random, Raw SA, Global (QUBO), and Clustered (DnC)."""
+    fig = plt.figure(figsize=(10, 6))
+    plt.plot(sizes, random_flow, "o-", label="Random Orientation", color="gray", alpha=0.6)
+    plt.plot(sizes, raw_sa_flow, "x--", label="Raw SA (SAMR2SSolver)", color="orange")
+    plt.plot(sizes, global_flow, "s-", label="Global (QuboMR2SSolver)", color="blue")
+    plt.plot(sizes, clustered_flow, "D-", label="Clustered (DnCMr2sSolver)", color="red", linewidth=2)
+    plt.xlabel("Graph Size (Number of Vertices)", fontsize=12)
+    plt.ylabel("Flow Imbalance Score Σ(In-Out)²", fontsize=12)
+    plt.title("Flow Stability: Comparison of Solvers", fontsize=14)
+    plt.legend()
+    plt.grid(True, linestyle="--", alpha=0.7)
+
+    if save_path:
+        plt.savefig(save_path, dpi=300)
+    return fig
+
+
+def plot_preprocessing_scalability(
+    sizes: list[int],
+    global_vars: list[float],
+    clustered_vars: list[float],
+    global_sg: list[float],
+    clustered_sg: list[float],
+    global_physical: list[float] | None = None,
+    clustered_physical_total: list[float] | None = None,
+    clustered_physical_max: list[float] | None = None,
+    clustered_physical_mean: list[float] | None = None,
+    clustered_physical_min: list[float] | None = None,
+    save_path: str | None = None,
+) -> plt.Figure:
+    """Plot Preprocessing Scalability (Global QUBO vs Clustered DnC)."""
+    n_panels = 3 if global_physical is not None else 2
+    fig, axes = plt.subplots(1, n_panels, figsize=(5 * n_panels, 6))
+    if n_panels == 1:
+        axes = [axes]
+
+    # 1. QUBO Variables
+    ax1 = axes[0]
+    ax1.plot(sizes, global_vars, "s-", label="Global (Full Graph)", color="blue")
+    ax1.plot(sizes, clustered_vars, "D-", label="Clustered (DnC)", color="red", linewidth=2)
+    ax1.set_xlabel("Graph Size (Vertices)", fontsize=12)
+    ax1.set_ylabel("Number of QUBO Variables", fontsize=12)
+    ax1.set_title("QUBO Complexity Reduction", fontsize=14)
+    ax1.legend()
+    ax1.grid(True, linestyle="--", alpha=0.7)
+
+    # 2. Subgraph Size
+    ax2 = axes[1]
+    ax2.plot(sizes, global_sg, "s-", label="Global (Full Graph)", color="blue")
+    ax2.plot(sizes, clustered_sg, "D-", label="Clustered (Max Subgraph)", color="red", linewidth=2)
+    ax2.set_xlabel("Graph Size (Vertices)", fontsize=12)
+    ax2.set_ylabel("Max QUBO Variables in One Subgraph", fontsize=12)
+    ax2.set_title("Subgraph Size Reduction", fontsize=14)
+    ax2.legend()
+    ax2.grid(True, linestyle="--", alpha=0.7)
+
+    # 3. Physical Qubits (Detailed)
+    if global_physical is not None and clustered_physical_total is not None:
+        ax3 = axes[2]
+        ax3.plot(sizes, global_physical, "s-", label="Global Total", color="blue", alpha=0.8)
+        ax3.plot(sizes, clustered_physical_total, "D-", label="Clustered Total", color="red", linewidth=2)
+
+        if clustered_physical_max:
+            ax3.plot(sizes, clustered_physical_max, "^--", label="Clustered Max", color="orange")
+        if clustered_physical_mean:
+            ax3.plot(sizes, clustered_physical_mean, "x--", label="Clustered Mean", color="green")
+        if clustered_physical_min:
+            ax3.plot(sizes, clustered_physical_min, "v--", label="Clustered Min", color="purple")
+
+        ax3.set_xlabel("Graph Size (Vertices)", fontsize=12)
+        ax3.set_ylabel("Physical Qubit Estimate (Pegasus)", fontsize=12)
+        ax3.set_title("Physical Resource Scalability", fontsize=14)
+        ax3.legend(fontsize=9)
+        ax3.grid(True, linestyle="--", alpha=0.7)
+
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300)
     return fig
