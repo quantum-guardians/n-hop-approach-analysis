@@ -32,10 +32,12 @@ from mr2s_module.solver.dnc_mr2s_solver import DnCMr2sSolver
 
 from src.commands.face_k_analysis import _generate_delaunay_graph, _nx_to_mr2s_graph
 from src.case_generator import sample_strongly_connected_orientations
+from src.cache import SimpleCache, generate_cache_key
 from src.score_calculator import calculate_apsp_sum_and_nhop_neighbor_counts
 from src.visualizer import plot_apsp_reduction, plot_flow_stability, plot_preprocessing_scalability
 
 spec = SmallWorldSpec([NHop(2, 1), NHop(3, 1)])
+POSTER_CACHE_VERSION = 1
 
 def _build_sa_solver(seed: int | None = None) -> SAMR2SSolver:
     return SAMR2SSolver(
@@ -195,14 +197,56 @@ def _run_trial(task: tuple[int, int, int | None]) -> tuple[int, int, dict[str, A
         "timings": timings,
     }
 
+def _poster_trial_cache_key(n: int, trial: int, seed: int | None) -> str:
+    """Return the stable cache key for one poster-result graph trial."""
+    return generate_cache_key(
+        "poster-results-trial",
+        version=POSTER_CACHE_VERSION,
+        n=n,
+        trial=trial,
+        seed=seed,
+    )
+
+def _run_trial_with_cache(
+    task: tuple[int, int, int | None, str | None]
+) -> tuple[int, int, dict[str, Any]]:
+    """Run one poster trial, reusing the on-disk cache when configured."""
+    n, trial, seed, cache_dir = task
+    if cache_dir is None:
+        n, trial, result = _run_trial((n, trial, seed))
+        result["cache_hit"] = False
+        result.setdefault("timings", {})["cache_hit"] = False
+        return n, trial, result
+
+    cache = SimpleCache(cache_dir)
+    cache_key = _poster_trial_cache_key(n, trial, seed)
+    cached_result = cache.get(cache_key)
+    if isinstance(cached_result, dict):
+        cached_result["cache_hit"] = True
+        cached_result.setdefault("timings", {})["cache_hit"] = True
+        return n, trial, cached_result
+
+    n, trial, result = _run_trial((n, trial, seed))
+    result["cache_hit"] = False
+    result.setdefault("timings", {})["cache_hit"] = False
+    cache.set(cache_key, result)
+    return n, trial, result
+
 def run(
     sizes: list[int],
     num_graphs: int,
     seed: int | None,
     output_dir: str,
     num_workers: int | None = None,
+    cache_dir: str | None = None,
+    use_cache: bool = True,
 ) -> None:
     os.makedirs(output_dir, exist_ok=True)
+    if cache_dir is None and use_cache:
+        cache_dir = os.path.join(output_dir, "poster_trial_cache")
+    elif not use_cache:
+        cache_dir = None
+
     results = {
         "sizes": sizes,
         "mr2s": {
@@ -217,7 +261,7 @@ def run(
         "random": {"apsp": [], "flow": []},
     }
 
-    tasks = [(n, trial, seed) for n in sizes for trial in range(num_graphs)]
+    tasks = [(n, trial, seed, cache_dir) for n in sizes for trial in range(num_graphs)]
     total_tasks = len(tasks)
     effective_workers = (
         num_workers
@@ -229,19 +273,21 @@ def run(
         f"Starting poster results: {len(sizes)} size(s), "
         f"{num_graphs} graph(s) each, {effective_workers} worker process(es)."
     )
+    if cache_dir is not None:
+        print(f"Using poster trial cache: {cache_dir}")
 
     trial_results: dict[int, list[dict[str, Any]]] = {n: [] for n in sizes}
 
     if effective_workers == 0:
         for index, task in enumerate(tasks, start=1):
-            n, trial, result = _run_trial(task)
+            n, trial, result = _run_trial_with_cache(task)
             _print_trial_progress(index, total_tasks, n, trial, result["timings"])
             trial_results[n].append(result)
     else:
         ctx = multiprocessing.get_context("fork")
         with ctx.Pool(processes=effective_workers) as pool:
             for index, (n, trial, result) in enumerate(
-                pool.imap_unordered(_run_trial, tasks),
+                pool.imap_unordered(_run_trial_with_cache, tasks),
                 start=1,
             ):
                 _print_trial_progress(index, total_tasks, n, trial, result["timings"])
@@ -298,6 +344,10 @@ def _print_trial_progress(
     trial: int,
     timings: dict[str, float],
 ) -> None:
+    if timings.get("cache_hit"):
+        print(f"[{index}/{total}] n={n}, trial={trial}: cache hit")
+        return
+
     print(
         f"[{index}/{total}] n={n}, trial={trial}: "
         f"Raw SA {timings['raw_sa']:.2f}s, "
@@ -319,6 +369,17 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output-dir", type=str, default="results/poster")
     p.add_argument(
+        "--cache-dir",
+        type=str,
+        default=None,
+        help="Directory for per-trial cache files; defaults to OUTPUT_DIR/poster_trial_cache.",
+    )
+    p.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable reading and writing the per-trial cache.",
+    )
+    p.add_argument(
         "--num-workers",
         type=int,
         default=None,
@@ -327,4 +388,12 @@ def register_parser(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_dispatch)
 
 def _dispatch(args: argparse.Namespace) -> None:
-    run(args.sizes, args.num_graphs, args.seed, args.output_dir, args.num_workers)
+    run(
+        args.sizes,
+        args.num_graphs,
+        args.seed,
+        args.output_dir,
+        args.num_workers,
+        args.cache_dir,
+        not args.no_cache,
+    )
