@@ -455,16 +455,21 @@ def _run_mr2s_trial_with_cache(
     cache.set(cache_key, result)
     return n, trial, result
 
+def _process_pool_context() -> multiprocessing.context.BaseContext:
+    """Prefer fork where available; fall back to the platform default."""
+    if "fork" in multiprocessing.get_all_start_methods():
+        return multiprocessing.get_context("fork")
+    return multiprocessing.get_context()
+
 def _iter_completed_trials(
     worker: Any,
     tasks: list[TrialTask],
     num_workers: int,
 ) -> Any:
     """Yield trial results from non-daemonic worker processes as they finish."""
-    ctx = multiprocessing.get_context("fork")
     with concurrent.futures.ProcessPoolExecutor(
         max_workers=num_workers,
-        mp_context=ctx,
+        mp_context=_process_pool_context(),
     ) as executor:
         futures = [executor.submit(worker, task) for task in tasks]
         for future in concurrent.futures.as_completed(futures):
