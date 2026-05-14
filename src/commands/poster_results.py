@@ -18,6 +18,7 @@ import time
 from typing import Any
 
 import numpy as np
+import networkx as nx
 import mr2s_module.domain.graph
 
 # Patch missing is_empty method in mr2s_module.domain.graph.Graph class directly
@@ -32,13 +33,12 @@ from mr2s_module import SAMR2SSolver, Evaluator, estimate_required_qubits, \
 from mr2s_module.solver.dnc_mr2s_solver import DnCMr2sSolver
 
 from src.commands.face_k_analysis import _generate_delaunay_graph, _nx_to_mr2s_graph
-from src.case_generator import sample_strongly_connected_orientations
 from src.cache import SimpleCache, generate_cache_key
 from src.score_calculator import calculate_apsp_sum_and_nhop_neighbor_counts
 from src.visualizer import plot_apsp_reduction, plot_flow_stability, plot_preprocessing_scalability
 
 spec = SmallWorldSpec([NHop(2, 1), NHop(3, 1)])
-POSTER_CACHE_VERSION = 2
+POSTER_CACHE_VERSION = 3
 
 TrialTask = tuple[int, int, int | None, str | None]
 
@@ -64,6 +64,62 @@ def _normalize_random_baseline(result: dict[str, Any]) -> dict[str, Any]:
         normalized["sample_count"] = 0
         return normalized
     return result
+
+def _sample_random_orientations(
+    graph: nx.Graph,
+    max_samples: int,
+    seed: int | None = None,
+) -> list[nx.DiGraph]:
+    """Sample arbitrary edge orientations without filtering by connectivity."""
+    if max_samples < 1:
+        raise ValueError(f"max_samples must be >= 1, got {max_samples}")
+
+    edges = list(graph.edges())
+    nodes = list(graph.nodes())
+    rng = np.random.default_rng(seed)
+    orientations: list[nx.DiGraph] = []
+
+    for _ in range(max_samples):
+        dg = nx.DiGraph()
+        dg.add_nodes_from(nodes)
+        bits = rng.integers(0, 2, size=len(edges))
+        for bit, (u, v) in zip(bits, edges):
+            if bit == 0:
+                dg.add_edge(u, v)
+            else:
+                dg.add_edge(v, u)
+        orientations.append(dg)
+
+    return orientations
+
+def _flow_imbalance_score(graph: nx.DiGraph) -> int:
+    return sum(
+        (graph.in_degree(node) - graph.out_degree(node)) ** 2
+        for node in graph.nodes()
+    )
+
+def _calculate_random_baseline(
+    graph: nx.Graph,
+    n: int,
+    seed: int | None,
+    max_samples: int = 10,
+) -> dict[str, Any]:
+    random_samples = _sample_random_orientations(graph, max_samples=max_samples, seed=seed)
+    trial_apsp = []
+    trial_flow = []
+
+    for orient in random_samples:
+        if nx.is_strongly_connected(orient):
+            apsp, _ = calculate_apsp_sum_and_nhop_neighbor_counts(orient, hops=[])
+            trial_apsp.append(apsp / (n * (n - 1)))
+        trial_flow.append(_flow_imbalance_score(orient))
+
+    return {
+        "apsp": _mean_finite(trial_apsp),
+        "flow": _mean_finite(trial_flow),
+        "sample_count": len(random_samples),
+        "strong_sample_count": len(trial_apsp),
+    }
 
 def _build_sa_solver(seed: int | None = None) -> SAMR2SSolver:
     return SAMR2SSolver(
@@ -339,33 +395,7 @@ def _run_trial(task: tuple[int, int, int | None]) -> tuple[int, int, dict[str, A
 
     # 4. Random
     start = time.monotonic()
-    random_samples = list(
-        sample_strongly_connected_orientations(
-            graph, max_samples=10, seed=trial_seed
-        )
-    )
-    if random_samples:
-        trial_apsp = []
-        trial_flow = []
-        for orient in random_samples:
-            apsp, _ = calculate_apsp_sum_and_nhop_neighbor_counts(orient, hops=[])
-            trial_apsp.append(apsp / (n * (n - 1)))
-            imbalance = sum(
-                (orient.in_degree(node) - orient.out_degree(node)) ** 2
-                for node in orient.nodes()
-            )
-            trial_flow.append(imbalance)
-        res_rnd = {
-            "apsp": np.mean(trial_apsp),
-            "flow": np.mean(trial_flow),
-            "sample_count": len(random_samples),
-        }
-    else:
-        res_rnd = {
-            "apsp": float("nan"),
-            "flow": float("nan"),
-            "sample_count": 0,
-        }
+    res_rnd = _calculate_random_baseline(graph, n, trial_seed)
     timings["random"] = time.monotonic() - start
 
     return n, trial, {

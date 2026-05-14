@@ -7,6 +7,8 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
+import networkx as nx
+
 from src.commands import poster_results as pr
 
 
@@ -48,7 +50,7 @@ def test_poster_trial_cache_key_is_stable() -> None:
     key = pr._poster_trial_cache_key(n=20, trial=3, seed=42)
     assert key == (
         'poster-results-trial:{"n": 20, "seed": 42, '
-        '"trial": 3, "version": 2}'
+        '"trial": 3, "version": 3}'
     )
 
 
@@ -157,6 +159,46 @@ def test_normalize_random_baseline_converts_legacy_zero_to_nan() -> None:
     assert math.isnan(normalized["apsp"])
     assert math.isnan(normalized["flow"])
     assert normalized["sample_count"] == 0
+
+
+def test_random_baseline_scores_flow_for_non_strong_orientation(monkeypatch) -> None:
+    graph = nx.path_graph(3)
+    orientation = nx.DiGraph([(0, 1), (1, 2)])
+    orientation.add_nodes_from(graph.nodes())
+
+    monkeypatch.setattr(
+        pr,
+        "_sample_random_orientations",
+        lambda _graph, max_samples, seed: [orientation],
+    )
+
+    result = pr._calculate_random_baseline(graph, n=3, seed=0, max_samples=1)
+
+    assert math.isnan(result["apsp"])
+    assert result["flow"] == 2.0
+    assert result["sample_count"] == 1
+    assert result["strong_sample_count"] == 0
+
+
+def test_random_baseline_averages_flow_across_all_orientations(monkeypatch) -> None:
+    graph = nx.cycle_graph(3)
+    strong_orientation = nx.DiGraph([(0, 1), (1, 2), (2, 0)])
+    non_strong_orientation = nx.DiGraph([(0, 1), (1, 2), (0, 2)])
+    for orientation in (strong_orientation, non_strong_orientation):
+        orientation.add_nodes_from(graph.nodes())
+
+    monkeypatch.setattr(
+        pr,
+        "_sample_random_orientations",
+        lambda _graph, max_samples, seed: [strong_orientation, non_strong_orientation],
+    )
+
+    result = pr._calculate_random_baseline(graph, n=3, seed=0, max_samples=2)
+
+    assert result["apsp"] == 0.5
+    assert result["flow"] == 2.0
+    assert result["sample_count"] == 2
+    assert result["strong_sample_count"] == 1
 
 
 def test_divide_graph_with_diagnostics_records_selected_partition(monkeypatch) -> None:
